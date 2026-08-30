@@ -1,0 +1,9 @@
+# Impeccable design-skill working files (kept local, not part of the shipped app)
+.impeccable/
+PRODUCT.md
+DESIGN.md
+
+# OS / editor noise
+.DS_Store
+Thumbs.db
+*.log

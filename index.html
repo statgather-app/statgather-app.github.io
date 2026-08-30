@@ -1,0 +1,1402 @@
+<!-- ==========================================================================
+     StatGather — direction contract (impeccable)
+     THESIS: A live classroom statistics INSTRUMENT, not a SaaS card-grid. The
+       class's distribution assembles at the front of the room in real time.
+       Refuses the same-size card page scaffold and the big-number hero template.
+     OWN-WORLD: Projector-legible light UI on a cool blue-white ground; deep navy
+       ink, one confident blue (#1668E3) carrying all interactive meaning; white
+       measurement panels with hairline cool borders; Hanken Grotesk voice,
+       JetBrains Mono for every measured value; a colorblind-separated categorical
+       chart palette. "Precise instrument", not gamified.
+     STORY: Teacher opens a room, projects it, shares a link; students on laptops
+       submit; the summary console + chart update live; teacher cleans outliers,
+       exports CSV.
+     FIRST VIEWPORT: control strip (wordmark + STAT-XXXX room code + copy-link +
+       live connected count), then a two-column console: setup + live data table
+       left, instrument summary strip + tabbed visualization right. Primary action
+       for a fresh teacher = "Host a session"; a ?room= visitor lands on the
+       student join card.
+     FORM: live measurement console. Brief-pinned world (blue, precise instrument);
+       no concept roll — the brief pins the world.
+     FINISH: unreviewed and undocumented is unfinished; this build ends with the
+       finish review, the verdict, DESIGN.md, and every shipping raster carrying
+       its provenance.
+     ========================================================================== -->
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>StatGather — live classroom statistics</title>
+<meta name="description" content="Collect a whole class's data live over peer-to-peer WebRTC, compute the summary statistics, and visualize the distribution. Serverless, single-file, free to host." />
+
+<!-- ── Dependencies (CDN only; runs with no build step, hostable on GitHub Pages) ── -->
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+<script src="https://cdn.plot.ly/plotly-2.29.0.min.js"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet" />
+
+<script>
+  /* Tailwind design tokens — the blue "precise instrument" palette. */
+  tailwind.config = {
+    theme: {
+      extend: {
+        colors: {
+          bg:        '#eef3fa', // cool blue-white room ground
+          surface:   '#ffffff',
+          panel:     '#f7fafd',
+          line:      '#dbe6f2', // hairline cool border
+          line2:     '#c7d6e8',
+          ink:       '#0a1f3c', // deep navy primary text
+          ink2:      '#3d557a', // tinted secondary text (never gray) — 7.5:1 on white
+          ink3:      '#4f6488', // tertiary / placeholder — kept ≥4.5:1 on white & panel
+          accent:    '#1668e3', // the one confident blue
+          accentdk:  '#0a3d91', // royal, for active/emphasis
+          accentsoft:'#e4eefc',
+          ok:        '#0f9d74', // saturated — dots, icons, fills
+          okd:       '#0a7557', // darker — text on the soft fill (≥4.5:1)
+          oksoft:    '#e0f5ee',
+          bad:       '#e5484d',
+          badd:      '#b3252a',
+          badsoft:   '#fdeaea',
+          warn:      '#c77d16',
+          warnd:     '#8a5610',
+          warnsoft:  '#fbf0dc',
+        },
+        fontFamily: {
+          sans: ['"Hanken Grotesk"', 'system-ui', '-apple-system', 'Segoe UI', 'sans-serif'],
+          mono: ['"JetBrains Mono"', 'ui-monospace', 'SFMono-Regular', 'Menlo', 'monospace'],
+        },
+        boxShadow: {
+          panel: '0 1px 2px rgba(10,31,60,.04), 0 8px 24px -12px rgba(10,31,60,.14)',
+          lift:  '0 4px 12px rgba(10,31,60,.06), 0 24px 48px -20px rgba(10,31,60,.24)',
+          focus: '0 0 0 4px rgba(22,104,227,.18)',
+        },
+        borderRadius: { xl2: '14px' },
+      },
+    },
+  };
+</script>
+
+<style>
+  /* Palette mirrored as CSS variables so Plotly (JS) draws from the same source. */
+  :root {
+    --bg:#eef3fa; --surface:#ffffff; --panel:#f7fafd; --line:#dbe6f2; --line2:#c7d6e8;
+    --ink:#0a1f3c; --ink2:#3d557a; --ink3:#4f6488;
+    --accent:#1668e3; --accentdk:#0a3d91; --ok:#0f9d74; --bad:#e5484d; --warn:#c77d16;
+    /* Categorical chart palette — ordered for maximum separation, colorblind-aware. */
+    --c0:#1668e3; --c1:#0f9d74; --c2:#c77d16; --c3:#7c5cfc;
+    --c4:#e5484d; --c5:#0ea5c4; --c6:#b0227f; --c7:#5c7a1e;
+  }
+
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    background:
+      radial-gradient(1200px 600px at 85% -8%, #f4f8fe 0%, rgba(244,248,254,0) 60%),
+      radial-gradient(900px 500px at -5% 108%, #eaf1fb 0%, rgba(234,241,251,0) 55%),
+      var(--bg);
+    color: var(--ink);
+    font-family: "Hanken Grotesk", system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+    min-height: 100vh;
+  }
+
+  /* Browser surfaces themed from the palette — not left at defaults. */
+  ::selection { background: rgba(22,104,227,.20); color: var(--ink); }
+  * { scrollbar-width: thin; scrollbar-color: var(--line2) transparent; }
+  ::-webkit-scrollbar { width: 11px; height: 11px; }
+  ::-webkit-scrollbar-thumb { background: var(--line2); border-radius: 99px; border: 3px solid transparent; background-clip: content-box; }
+  ::-webkit-scrollbar-thumb:hover { background: #a9bdd6; background-clip: content-box; }
+  :focus-visible { outline: none; box-shadow: 0 0 0 3px var(--surface), 0 0 0 5px var(--accent); border-radius: 8px; }
+  /* Solid two-layer ring (surface gap + accent) so the focus indicator clears 3:1. */
+  input:focus-visible, select:focus-visible, textarea:focus-visible { box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px var(--accent); }
+
+  .mono { font-family: "JetBrains Mono", ui-monospace, monospace; font-variant-numeric: tabular-nums; }
+  .tnum { font-variant-numeric: tabular-nums; }
+
+  /* Entrance: one authored moment, exponential ease-out from an already-visible default. */
+  @keyframes rise { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+  .rise { animation: rise .5s cubic-bezier(.16,1,.3,1) both; }
+  @keyframes pop { 0% { transform: scale(.96); } 60% { transform: scale(1.015); } 100% { transform: scale(1); } }
+  @keyframes pulse-ring { 0% { box-shadow: 0 0 0 0 rgba(15,157,116,.5); } 70% { box-shadow: 0 0 0 7px rgba(15,157,116,0); } 100% { box-shadow: 0 0 0 0 rgba(15,157,116,0); } }
+  .live-dot { animation: pulse-ring 2.2s cubic-bezier(.16,1,.3,1) infinite; }
+  @keyframes row-in { from { opacity: 0; transform: translateX(-6px); } to { opacity: 1; transform: none; } }
+  .row-in { animation: row-in .32s cubic-bezier(.16,1,.3,1) both; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .spin { animation: spin .8s linear infinite; }
+  @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: .001ms !important; animation-iteration-count: 1 !important; transition-duration: .001ms !important; } }
+
+  /* Controls */
+  .field {
+    width: 100%; background: var(--surface); border: 1px solid var(--line2);
+    border-radius: 10px; padding: .62rem .8rem; color: var(--ink); font-size: .95rem;
+    caret-color: var(--accent);
+    transition: border-color .15s ease, box-shadow .15s ease;
+  }
+  .field::placeholder { color: var(--ink3); }
+  .field:hover { border-color: #b4c8e0; }
+  .field:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(22,104,227,.28); }
+  select.field { appearance: none; background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%233d557a' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E"); background-repeat: no-repeat; background-position: right .7rem center; padding-right: 2.1rem; }
+
+  .btn { display: inline-flex; align-items: center; justify-content: center; gap: .5rem; font-weight: 600; border-radius: 10px; transition: transform .12s cubic-bezier(.16,1,.3,1), background .15s ease, box-shadow .15s ease, border-color .15s ease, color .15s ease; cursor: pointer; white-space: nowrap; }
+  .btn:active { transform: translateY(1px) scale(.99); }
+  .btn:disabled { opacity: .5; cursor: not-allowed; transform: none; }
+  .btn-primary { background: var(--accent); color: #fff; box-shadow: 0 6px 16px -6px rgba(22,104,227,.6); }
+  .btn-primary:hover:not(:disabled) { background: #1259c9; box-shadow: 0 8px 20px -6px rgba(22,104,227,.7); }
+  .btn-ghost { background: var(--surface); color: var(--ink); border: 1px solid var(--line2); }
+  .btn-ghost:hover:not(:disabled) { border-color: #a9c1e2; background: #fbfdff; }
+  .btn-soft { background: var(--accentsoft, #e4eefc); color: var(--accentdk); }
+  .btn-soft:hover:not(:disabled) { background: #d6e6fb; }
+
+  .chip { display: inline-flex; align-items: center; gap: .4rem; font-size: .78rem; font-weight: 600; padding: .28rem .6rem; border-radius: 99px; letter-spacing: .01em; }
+
+  /* Segmented tab control for the visualization suite */
+  .seg { position: relative; }
+  .seg-btn { position: relative; z-index: 1; font-weight: 600; font-size: .86rem; color: var(--ink2); padding: .5rem .85rem; border-radius: 8px; transition: color .18s ease; white-space: nowrap; }
+  .seg-btn[aria-selected="true"] { color: var(--accentdk); }
+  .seg-btn:hover:not([aria-selected="true"]) { color: var(--ink); }
+
+  /* Data table */
+  .dt-wrap { overflow: auto; }
+  table.dt { width: 100%; border-collapse: collapse; font-size: .9rem; }
+  table.dt th { position: sticky; top: 0; background: var(--panel); text-align: left; font-weight: 600; color: var(--ink2); font-size: .74rem; letter-spacing: .06em; text-transform: uppercase; padding: .55rem .7rem; border-bottom: 1px solid var(--line); z-index: 1; }
+  table.dt td { padding: .5rem .7rem; border-bottom: 1px solid var(--line); }
+  table.dt tr:last-child td { border-bottom: none; }
+  table.dt tbody tr:hover { background: #f4f8fe; }
+
+  .del-btn { color: var(--ink3); border-radius: 7px; padding: .28rem; transition: color .14s ease, background .14s ease; }
+  .del-btn:hover { color: var(--bad); background: var(--badsoft); }
+
+  /* Stem-and-leaf renderer */
+  .stemleaf { font-family: "JetBrains Mono", monospace; font-size: .9rem; line-height: 1.65; }
+  .stemleaf .sl-row { display: grid; grid-template-columns: 3.4rem 1px 1fr; gap: .7rem; align-items: baseline; }
+  .stemleaf .sl-stem { text-align: right; color: var(--accentdk); font-weight: 700; }
+  .stemleaf .sl-bar { background: var(--line2); align-self: stretch; }
+  .stemleaf .sl-leaves { color: var(--ink); letter-spacing: .12em; word-break: break-all; }
+
+  .modal-back { background: rgba(10,31,60,.42); backdrop-filter: blur(3px); }
+
+  /* Plotly: strip its default UI chrome so charts read as part of the console */
+  .js-plotly-plot .plotly .modebar { opacity: 0; transition: opacity .2s ease; }
+  .js-plotly-plot:hover .plotly .modebar { opacity: .8; }
+
+  .toast { animation: rise .3s cubic-bezier(.16,1,.3,1) both; }
+</style>
+
+<!-- ======================= APP ROOT ======================= -->
+<div id="app" class="min-h-screen">
+
+  <!-- ───────────────────────── LAUNCH SCREEN ───────────────────────── -->
+  <section id="screen-launch" class="hidden">
+    <div class="max-w-6xl mx-auto px-6 py-10 lg:py-16">
+      <header class="flex items-center gap-3 mb-14">
+        <div id="brandmark-l"></div>
+        <span class="font-extrabold text-xl tracking-tight">StatGather</span>
+      </header>
+
+      <div class="grid lg:grid-cols-[1.05fr_.95fr] gap-12 lg:gap-16 items-center">
+        <div class="rise">
+          <h1 class="text-4xl lg:text-[3.15rem] font-extrabold tracking-tight leading-[1.05] text-balance">
+            The whole class's data, live at the front of the room.
+          </h1>
+          <p class="text-ink2 text-lg mt-5 max-w-[54ch] leading-relaxed">
+            Students submit from their laptops over a direct WebRTC link. StatGather computes the
+            summary statistics and draws the distribution as the numbers arrive — no spreadsheet,
+            no server, nothing stored.
+          </p>
+
+          <ul class="flex flex-wrap gap-x-6 gap-y-2 mt-6 text-sm font-semibold text-ink2">
+            <li class="flex items-center gap-2"><span class="text-accent"><span class="icon" data-icon="check"></span></span>Peer-to-peer, serverless</li>
+            <li class="flex items-center gap-2"><span class="text-accent"><span class="icon" data-icon="check"></span></span>No accounts</li>
+            <li class="flex items-center gap-2"><span class="text-accent"><span class="icon" data-icon="check"></span></span>Free to host</li>
+          </ul>
+
+          <div class="mt-8 flex flex-col sm:flex-row gap-4">
+            <button id="go-teacher" class="btn btn-primary text-base px-6 py-3.5">
+              <span class="icon" data-icon="broadcast"></span> Host a session
+            </button>
+            <form id="join-form" class="flex items-stretch gap-2">
+              <div class="relative">
+                <span class="mono absolute left-3 top-1/2 -translate-y-1/2 text-ink3 font-semibold text-sm pointer-events-none">STAT-</span>
+                <input id="join-code" inputmode="text" autocomplete="off" maxlength="4"
+                       class="field mono font-semibold uppercase tracking-widest w-44 pl-[3.4rem]"
+                       placeholder="7K2P" aria-label="Room code" />
+              </div>
+              <button type="submit" class="btn btn-ghost px-5 py-3.5">Join as student</button>
+            </form>
+          </div>
+          <p id="launch-hint" class="text-ink3 text-sm mt-3 h-5" aria-live="polite"></p>
+        </div>
+
+        <!-- Live preview instrument — proves the tool at a glance, not a decorative card -->
+        <div class="rise" style="animation-delay:.08s">
+          <div class="bg-surface border border-line rounded-xl2 shadow-lift p-6">
+            <div class="flex items-center justify-between mb-5">
+              <span class="text-xs font-semibold uppercase tracking-[.14em] text-ink2">Sample readout</span>
+              <span class="chip bg-oksoft text-okd"><span class="w-1.5 h-1.5 rounded-full bg-ok"></span>24 connected</span>
+            </div>
+            <div id="preview-plot" style="height:170px;margin:-6px -6px 4px"></div>
+            <div class="grid grid-cols-4 gap-px bg-line rounded-lg overflow-hidden mt-2">
+              <div class="bg-surface p-3"><div class="text-[.65rem] uppercase tracking-wider text-ink2 font-semibold">Mean</div><div class="mono text-lg font-bold mt-.5">64.9</div></div>
+              <div class="bg-surface p-3"><div class="text-[.65rem] uppercase tracking-wider text-ink2 font-semibold">Median</div><div class="mono text-lg font-bold mt-.5">65.0</div></div>
+              <div class="bg-surface p-3"><div class="text-[.65rem] uppercase tracking-wider text-ink2 font-semibold">s</div><div class="mono text-lg font-bold mt-.5">3.4</div></div>
+              <div class="bg-surface p-3"><div class="text-[.65rem] uppercase tracking-wider text-ink2 font-semibold">IQR</div><div class="mono text-lg font-bold mt-.5">4.5</div></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ───────────────────────── TEACHER DASHBOARD ───────────────────────── -->
+  <section id="screen-teacher" class="hidden">
+    <!-- Control strip -->
+    <div class="sticky top-0 z-30 bg-surface/90 backdrop-blur border-b border-line">
+      <div class="max-w-[1500px] mx-auto px-5 lg:px-8 py-3 flex flex-wrap items-center gap-x-6 gap-y-3">
+        <button id="t-home" class="flex items-center gap-2.5 group" title="Back to start">
+          <div id="brandmark-t"></div>
+          <span class="font-extrabold tracking-tight group-hover:text-accent transition-colors">StatGather</span>
+        </button>
+
+        <div class="flex items-center gap-3">
+          <span class="text-xs font-semibold uppercase tracking-[.12em] text-ink2">Room</span>
+          <span id="t-code" class="mono text-2xl font-bold tracking-wide text-accentdk">STAT-————</span>
+        </div>
+
+        <div class="flex items-center gap-2 flex-1 min-w-[240px] max-w-[520px]">
+          <input id="t-link" readonly class="field mono text-xs !py-2 text-ink2 cursor-default" value="" aria-label="Join link" />
+          <button id="t-copy" class="btn btn-soft px-3 !py-2 text-sm" title="Copy join link" aria-label="Copy join link">
+            <span class="icon" data-icon="copy"></span><span class="hidden sm:inline">Copy link</span>
+          </button>
+        </div>
+
+        <div class="flex items-center gap-3 ml-auto">
+          <span id="t-conn" class="chip bg-panel text-ink2 border border-line" title="Connection to the peer network">
+            <span id="t-conn-dot" class="w-2 h-2 rounded-full bg-ink3"></span><span id="t-conn-text">Starting…</span>
+          </span>
+          <span class="chip bg-oksoft text-okd" title="Students currently connected">
+            <span class="w-2 h-2 rounded-full bg-ok live-dot"></span>
+            <span class="mono font-bold" id="t-count">0</span>&nbsp;connected
+          </span>
+        </div>
+      </div>
+    </div>
+
+    <div class="max-w-[1500px] mx-auto px-5 lg:px-8 py-6 grid lg:grid-cols-[minmax(340px,420px)_1fr] gap-6 items-start">
+
+      <!-- LEFT: setup + data intake -->
+      <div class="space-y-6">
+        <!-- Survey configuration -->
+        <div class="bg-surface border border-line rounded-xl2 shadow-panel p-5">
+          <h2 class="font-bold text-lg mb-1">Survey</h2>
+          <p class="text-ink2 text-sm mb-4">What each student sends in. Changes broadcast to everyone connected.</p>
+
+          <label class="block text-sm font-semibold text-ink2 mb-1.5" for="cfg-question">Question / prompt</label>
+          <input id="cfg-question" class="field mb-4" placeholder="e.g. Height in inches" value="Height in inches" />
+
+          <label class="block text-sm font-semibold text-ink2 mb-1.5" for="cfg-type">Data type</label>
+          <select id="cfg-type" class="field mb-4">
+            <option value="continuous">Numerical — continuous</option>
+            <option value="discrete">Numerical — discrete</option>
+            <option value="categorical">Categorical</option>
+          </select>
+
+          <label class="flex items-center justify-between gap-3 cursor-pointer select-none pt-1">
+            <span>
+              <span class="block text-sm font-semibold">Allow multiple submissions</span>
+              <span class="block text-xs text-ink2 mt-.5">Let each student send more than one value</span>
+            </span>
+            <span id="cfg-multi" role="switch" aria-checked="false" tabindex="0" aria-label="Allow multiple submissions per student"
+                  class="relative shrink-0 w-11 h-6 rounded-full bg-line2 transition-colors duration-200">
+              <span class="absolute top-.5 left-.5 w-5 h-5 rounded-full bg-white shadow transition-transform duration-200"></span>
+            </span>
+          </label>
+        </div>
+
+        <!-- Live data table -->
+        <div class="bg-surface border border-line rounded-xl2 shadow-panel overflow-hidden">
+          <div class="flex items-center justify-between p-5 pb-3">
+            <h2 class="font-bold text-lg">Responses <span id="dt-n" class="mono text-ink3 font-semibold text-base">(0)</span></h2>
+            <div class="flex gap-2">
+              <button id="btn-bulk" class="btn btn-ghost text-sm !py-1.5 px-3" title="Paste many values at once">
+                <span class="icon" data-icon="layers"></span>Bulk
+              </button>
+              <button id="btn-export" class="btn btn-ghost text-sm !py-1.5 px-3" title="Download all responses as CSV">
+                <span class="icon" data-icon="download"></span>CSV
+              </button>
+            </div>
+          </div>
+
+          <!-- manual add -->
+          <form id="manual-form" class="px-5 pb-3 flex gap-2">
+            <input id="manual-input" class="field" placeholder="Add a value manually…" autocomplete="off" aria-label="Add a value manually" />
+            <button type="submit" class="btn btn-primary px-4" title="Add value" aria-label="Add value"><span class="icon" data-icon="plus"></span></button>
+          </form>
+
+          <div class="dt-wrap max-h-[420px] border-t border-line">
+            <table class="dt">
+              <thead>
+                <tr><th class="w-14">#</th><th>Value</th><th class="w-28">Time</th><th class="w-10"></th></tr>
+              </thead>
+              <tbody id="dt-body"></tbody>
+            </table>
+            <div id="dt-empty" class="px-5 py-12 text-center">
+              <div class="mx-auto w-11 h-11 rounded-full bg-panel border border-line grid place-items-center text-ink3 mb-3"><span class="icon" data-icon="inbox"></span></div>
+              <p class="text-ink2 text-sm">No responses yet.</p>
+              <p class="text-ink3 text-sm mt-1">Share the room link, add values by hand, or paste in bulk.</p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- RIGHT: summary console + visualization -->
+      <div class="space-y-6">
+        <!-- Instrument summary strip -->
+        <div class="bg-surface border border-line rounded-xl2 shadow-panel p-5">
+          <div class="flex items-center justify-between mb-4">
+            <h2 class="font-bold text-lg">Summary</h2>
+            <span id="sum-note" class="text-xs text-ink3"></span>
+          </div>
+          <div id="stat-grid" class="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-5 gap-px bg-line rounded-lg overflow-hidden"></div>
+        </div>
+
+        <!-- Visualization suite -->
+        <div class="bg-surface border border-line rounded-xl2 shadow-panel p-5">
+          <div class="flex items-center justify-between gap-4 mb-4 flex-wrap">
+            <h2 class="font-bold text-lg">Distribution</h2>
+            <div id="viz-tabs" class="seg flex gap-1 bg-panel border border-line rounded-[10px] p-1" role="tablist" aria-label="Chart type"></div>
+          </div>
+
+          <!-- histogram bin control -->
+          <div id="hist-controls" class="hidden items-center gap-3 mb-3 text-sm">
+            <label for="bin-slider" class="font-semibold text-ink2">Bin width</label>
+            <input id="bin-slider" type="range" class="flex-1 max-w-xs accent-accent" min="1" max="40" value="10" />
+            <span id="bin-readout" class="mono font-semibold text-accentdk w-16"></span>
+          </div>
+
+          <div id="viz-area" class="relative" role="tabpanel" aria-label="Selected chart">
+            <div id="chart" style="width:100%;height:440px"></div>
+            <div id="stem-area" class="hidden max-h-[440px] overflow-auto p-2"></div>
+            <div id="viz-empty" class="hidden absolute inset-0 grid place-items-center text-center">
+              <div>
+                <div class="mx-auto w-12 h-12 rounded-full bg-panel border border-line grid place-items-center text-ink3 mb-3"><span class="icon" data-icon="chart"></span></div>
+                <p class="text-ink2">Waiting for data.</p>
+                <p class="text-ink3 text-sm mt-1" id="viz-empty-sub">Charts appear as soon as the first response arrives.</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ───────────────────────── STUDENT SCREEN ───────────────────────── -->
+  <section id="screen-student" class="hidden">
+    <div class="min-h-screen grid place-items-center px-5 py-10">
+      <div class="w-full max-w-xl">
+        <header class="flex items-center justify-center gap-2.5 mb-8">
+          <div id="brandmark-s"></div>
+          <span class="font-extrabold text-lg tracking-tight">StatGather</span>
+        </header>
+
+        <div class="bg-surface border border-line rounded-xl2 shadow-lift overflow-hidden rise">
+          <!-- status bar -->
+          <div class="flex items-center justify-between px-6 py-3.5 border-b border-line bg-panel">
+            <div class="flex items-center gap-2">
+              <span class="text-xs font-semibold uppercase tracking-[.12em] text-ink2">Room</span>
+              <span id="s-code" class="mono font-bold text-accentdk">STAT-————</span>
+            </div>
+            <span id="s-badge" class="chip bg-panel text-ink2 border border-line">
+              <span id="s-badge-dot" class="w-2 h-2 rounded-full bg-ink3"></span><span id="s-badge-text">Connecting…</span>
+            </span>
+          </div>
+
+          <!-- join step (only if no room prefilled) -->
+          <div id="s-join" class="hidden p-8">
+            <h1 class="text-2xl font-extrabold tracking-tight mb-1.5">Join a session</h1>
+            <p class="text-ink2 mb-6">Enter the 4-character code your teacher is showing.</p>
+            <form id="s-join-form" class="flex gap-2">
+              <div class="relative flex-1">
+                <span class="mono absolute left-4 top-1/2 -translate-y-1/2 text-ink3 font-semibold pointer-events-none">STAT-</span>
+                <input id="s-join-code" maxlength="4" autocomplete="off" aria-label="Room code"
+                       class="field mono font-bold uppercase tracking-[.3em] text-lg pl-[4.2rem]" placeholder="7K2P" />
+              </div>
+              <button type="submit" class="btn btn-primary px-6">Connect</button>
+            </form>
+            <p id="s-join-hint" class="text-badd text-sm mt-3 h-5" aria-live="polite"></p>
+          </div>
+
+          <!-- submission form -->
+          <div id="s-submit" class="hidden p-8">
+            <h1 id="s-question" class="text-2xl lg:text-[1.7rem] font-extrabold tracking-tight leading-tight">…</h1>
+            <p id="s-type-label" class="chip bg-panel text-ink2 border border-line mt-3 mb-6">Numerical</p>
+
+            <form id="s-form">
+              <label class="block text-sm font-semibold text-ink2 mb-1.5" for="s-value">Your response</label>
+              <input id="s-value" class="field text-lg" autocomplete="off" placeholder="Type your answer" aria-describedby="s-error" />
+              <div id="s-cat-choices" class="hidden flex-wrap gap-2 mt-3"></div>
+              <p id="s-error" class="text-badd text-sm mt-2 h-5" aria-live="polite"></p>
+              <button type="submit" id="s-send" class="btn btn-primary w-full text-base py-3.5 mt-2">
+                Submit response
+              </button>
+            </form>
+            <p id="s-mine" class="text-ink3 text-sm text-center mt-4 h-5"></p>
+          </div>
+
+          <!-- confirmation -->
+          <div id="s-done" class="hidden p-10 text-center">
+            <div class="mx-auto w-16 h-16 rounded-full bg-oksoft grid place-items-center text-ok mb-5" style="animation:pop .5s cubic-bezier(.16,1,.3,1) both">
+              <span class="icon" data-icon="check-lg"></span>
+            </div>
+            <h1 class="text-2xl font-extrabold tracking-tight">Submission received</h1>
+            <p class="text-ink2 mt-2">Your value was sent to the teacher.</p>
+            <p id="s-done-value" class="mono text-lg font-bold mt-4 inline-block bg-panel border border-line rounded-lg px-4 py-2"></p>
+            <div class="mt-7">
+              <button id="s-again" class="btn btn-soft px-6 py-3 hidden">Submit another response</button>
+              <p id="s-locked" class="text-ink3 text-sm hidden">Thanks — one response per student for this session.</p>
+            </div>
+          </div>
+
+          <!-- error / disconnected -->
+          <div id="s-error-state" class="hidden p-10 text-center">
+            <div class="mx-auto w-16 h-16 rounded-full bg-badsoft grid place-items-center text-bad mb-5">
+              <span class="icon" data-icon="alert"></span>
+            </div>
+            <h1 class="text-2xl font-extrabold tracking-tight" id="s-err-title">Can't reach the room</h1>
+            <p class="text-ink2 mt-2 max-w-sm mx-auto" id="s-err-body">Double-check the code with your teacher. The session may not be running yet, or the network may be blocking the connection.</p>
+            <button id="s-retry" class="btn btn-primary px-6 py-3 mt-6">Try again</button>
+          </div>
+        </div>
+
+        <p class="text-center text-ink3 text-sm mt-6">Nothing you enter is stored anywhere but your teacher's screen.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- Bulk input modal -->
+  <div id="bulk-modal" class="hidden fixed inset-0 z-50 modal-back grid place-items-center p-5">
+    <div class="bg-surface w-full max-w-lg rounded-xl2 shadow-lift border border-line" style="animation:pop .3s cubic-bezier(.16,1,.3,1) both" role="dialog" aria-modal="true" aria-labelledby="bulk-title">
+      <div class="flex items-center justify-between p-5 border-b border-line">
+        <h2 id="bulk-title" class="font-bold text-lg">Bulk manual input</h2>
+        <button id="bulk-close" class="del-btn" aria-label="Close"><span class="icon" data-icon="x"></span></button>
+      </div>
+      <div class="p-5">
+        <p class="text-ink2 text-sm mb-3">Emergency backup for when the network blocks peer-to-peer traffic. Paste values separated by commas, spaces, or new lines.</p>
+        <textarea id="bulk-text" class="field font-mono text-sm h-44 resize-none" aria-label="Values to add in bulk" placeholder="63, 65, 71, 68&#10;60 66 64&#10;72"></textarea>
+        <p id="bulk-preview" class="text-ink3 text-sm mt-2 h-5"></p>
+      </div>
+      <div class="flex justify-end gap-2 p-5 pt-0">
+        <button id="bulk-cancel" class="btn btn-ghost px-4 py-2.5">Cancel</button>
+        <button id="bulk-add" class="btn btn-primary px-5 py-2.5">Add values</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- toast host (announced to assistive tech) -->
+  <div id="toast-host" role="status" aria-live="polite" aria-atomic="true" class="fixed bottom-5 left-1/2 -translate-x-1/2 z-[60] flex flex-col items-center gap-2 pointer-events-none"></div>
+</div>
+
+<script>
+/* ============================================================================
+   StatGather — application logic
+   Single file, no build. Sections:
+     1. Icons + tiny DOM helpers
+     2. Statistics engine (pure functions; documented conventions)
+     3. Router / screen switching
+     4. Teacher mode: PeerJS host, config broadcast, table, stats, charts, export
+     5. Student mode: PeerJS client, handshake, validation, submit, states
+   ============================================================================ */
+
+/* ── 1. Icons (single-stroke SVG set — no emoji/unicode as icons) ───────────── */
+const ICONS = {
+  broadcast:'<circle cx="12" cy="12" r="2"/><path d="M16.24 7.76a6 6 0 0 1 0 8.49M7.76 16.24a6 6 0 0 1 0-8.49M19.07 4.93a10 10 0 0 1 0 14.14M4.93 19.07a10 10 0 0 1 0-14.14"/>',
+  copy:'<rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>',
+  check:'<polyline points="20 6 9 17 4 12"/>',
+  'check-lg':'<polyline points="20 6 9 17 4 12"/>',
+  download:'<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>',
+  layers:'<polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/>',
+  plus:'<line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>',
+  x:'<line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>',
+  trash:'<polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>',
+  inbox:'<polyline points="22 12 16 12 14 15 10 15 8 12 2 12"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/>',
+  chart:'<line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/>',
+  alert:'<path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>',
+};
+function iconSVG(name, size = 18) {
+  const p = ICONS[name] || '';
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${p}</svg>`;
+}
+function paintIcons(root = document) {
+  root.querySelectorAll('.icon[data-icon]').forEach(el => {
+    if (!el.dataset.painted) { el.innerHTML = iconSVG(el.dataset.icon, el.dataset.size ? +el.dataset.size : 18); el.dataset.painted = '1'; el.classList.add('inline-flex'); }
+  });
+}
+/* Brandmark: a small distribution glyph — bars rising to a peak (the app's job). */
+function brandmark(el) {
+  el.innerHTML = `<svg width="30" height="30" viewBox="0 0 32 32" fill="none" aria-hidden="true">
+    <rect x="2" y="20" width="5" height="10" rx="1.5" fill="#1668e3" opacity=".45"/>
+    <rect x="9" y="13" width="5" height="17" rx="1.5" fill="#1668e3" opacity=".7"/>
+    <rect x="16" y="7" width="5" height="23" rx="1.5" fill="#1668e3"/>
+    <rect x="23" y="15" width="5" height="15" rx="1.5" fill="#0a3d91" opacity=".8"/>
+  </svg>`;
+}
+
+const $ = (s, r = document) => r.querySelector(s);
+const $$ = (s, r = document) => Array.from(r.querySelectorAll(s));
+const CSSVAR = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+
+function toast(msg, kind = 'ok') {
+  const host = $('#toast-host');
+  const el = document.createElement('div');
+  const color = kind === 'ok' ? 'text-okd' : kind === 'bad' ? 'text-badd' : 'text-accentdk';
+  el.className = 'toast pointer-events-auto bg-surface border border-line shadow-lift rounded-xl2 px-4 py-2.5 text-sm font-semibold flex items-center gap-2 ' + color;
+  el.innerHTML = `<span class="icon" data-icon="${kind === 'bad' ? 'alert' : 'check'}"></span>${msg}`;
+  host.appendChild(el); paintIcons(el);
+  setTimeout(() => { el.style.transition = 'opacity .3s, transform .3s'; el.style.opacity = '0'; el.style.transform = 'translateY(8px)'; setTimeout(() => el.remove(), 320); }, 2600);
+}
+
+/* ── 2. Statistics engine ────────────────────────────────────────────────────
+   Conventions (documented because this is a teaching tool):
+   • Standard deviation is the SAMPLE std (divides by n-1), labelled s.
+   • Quartiles use the Moore & McCabe / "median of halves" method taught in
+     intro/AP statistics: split the sorted data at the median (excluding the
+     median itself when n is odd); Q1 = median of the lower half, Q3 = median of
+     the upper half. IQR = Q3 - Q1. Outliers are values beyond Q1-1.5·IQR or
+     Q3+1.5·IQR. The box plot is drawn from THESE numbers so the chart and the
+     summary panel can never disagree.                                          */
+const Stats = {
+  median(sorted) {
+    const n = sorted.length; if (!n) return NaN;
+    const m = Math.floor(n / 2);
+    return n % 2 ? sorted[m] : (sorted[m - 1] + sorted[m]) / 2;
+  },
+  compute(values) {
+    const xs = values.filter(v => Number.isFinite(v)).slice().sort((a, b) => a - b);
+    const n = xs.length;
+    if (!n) return { n: 0 };
+    const sum = xs.reduce((a, b) => a + b, 0);
+    const mean = sum / n;
+    const median = this.median(xs);
+    const variance = n > 1 ? xs.reduce((a, b) => a + (b - mean) ** 2, 0) / (n - 1) : 0;
+    const sd = Math.sqrt(variance);
+    // Moore & McCabe halves
+    const half = Math.floor(n / 2);
+    const lower = xs.slice(0, half);
+    const upper = n % 2 ? xs.slice(half + 1) : xs.slice(half);
+    const q1 = n === 1 ? xs[0] : this.median(lower);
+    const q3 = n === 1 ? xs[0] : this.median(upper);
+    const iqr = q3 - q1;
+    const lowerFence = q1 - 1.5 * iqr;
+    const upperFence = q3 + 1.5 * iqr;
+    const outliers = xs.filter(v => v < lowerFence || v > upperFence);
+    return {
+      n, mean, median, sd, variance,
+      min: xs[0], max: xs[n - 1], range: xs[n - 1] - xs[0],
+      q1, q3, iqr, lowerFence, upperFence, outliers, sorted: xs,
+    };
+  },
+};
+/* Format numbers cleanly: integers stay integers, otherwise up to 2 decimals. */
+function fmt(x, dp = 2) {
+  if (!Number.isFinite(x)) return '—';
+  if (Math.abs(x - Math.round(x)) < 1e-9) return String(Math.round(x));
+  return (+x.toFixed(dp)).toString();
+}
+
+/* ── 3. Router ──────────────────────────────────────────────────────────────*/
+const SCREENS = ['launch', 'teacher', 'student'];
+function show(screen) {
+  SCREENS.forEach(s => $('#screen-' + s).classList.toggle('hidden', s !== screen));
+  window.scrollTo(0, 0);
+}
+
+/* Room code alphabet avoids ambiguous glyphs (no 0/O, 1/I). */
+const CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+function makeCode() {
+  let c = ''; for (let i = 0; i < 4; i++) c += CODE_ALPHABET[Math.floor(Math.random() * CODE_ALPHABET.length)];
+  return c;
+}
+const PEER_PREFIX = 'statgather-';
+const joinLinkFor = code => location.origin + location.pathname + '?room=' + code;
+
+/* ============================================================================
+   4. TEACHER MODE
+   ============================================================================ */
+const Teacher = {
+  peer: null, code: null,
+  conns: new Map(),           // conn.peer -> { conn, count }
+  submittedCids: new Map(),   // persistent client id -> submission count (survives reconnects)
+  dataset: [],                // [{ id, value(number|string), ts }]
+  seq: 0,
+  config: { question: 'Height in inches', dataType: 'continuous', allowMultiple: false },
+  activeViz: null,
+  binWidth: null,
+
+  start() {
+    show('teacher');
+    this.code = makeCode();
+    this.renderIdentity();
+    this.bindUI();
+    this.initPeer();
+    this.setActiveVizForType();
+    this.renderAll();
+  },
+
+  renderIdentity() {
+    $('#t-code').textContent = 'STAT-' + this.code;
+    $('#t-link').value = joinLinkFor(this.code);
+  },
+
+  /* --- PeerJS host: claim a stable id derived from the room code so students
+         can reach us by knowing only the 4-char code. --- */
+  initPeer(attempt = 0) {
+    this.setConn('starting', 'Starting…');
+    // If the id is already taken on the broker, regenerate the code and retry.
+    this.peer = new Peer(PEER_PREFIX + this.code, { debug: 1 });
+
+    this.peer.on('open', () => this.setConn('ok', 'Room live'));
+
+    this.peer.on('connection', conn => this.onStudentConnect(conn));
+
+    this.peer.on('disconnected', () => {
+      this.setConn('warn', 'Reconnecting…');
+      try { this.peer.reconnect(); } catch (e) {}
+    });
+
+    this.peer.on('error', err => {
+      console.warn('[StatGather host] peer error:', err.type, err);
+      if (err.type === 'unavailable-id' && attempt < 5) {
+        // Code collision — pick a fresh code and try again.
+        this.code = makeCode(); this.renderIdentity();
+        try { this.peer.destroy(); } catch (e) {}
+        return this.initPeer(attempt + 1);
+      }
+      if (err.type === 'unavailable-id') { // exhausted retries — don't leave it on "Starting…"
+        this.setConn('bad', "Couldn't start room");
+        toast('Could not claim a room code — reload to retry.', 'bad');
+        return;
+      }
+      if (err.type === 'network' || err.type === 'server-error' || err.type === 'socket-error') {
+        this.setConn('bad', 'Network blocked');
+        toast('Peer network unreachable — use Bulk or manual entry.', 'bad');
+      } else if (err.type === 'browser-incompatible') {
+        this.setConn('bad', 'Unsupported browser');
+      }
+    });
+  },
+
+  onStudentConnect(conn) {
+    conn.on('open', () => {
+      this.conns.set(conn.peer, { conn, count: 0 });
+      this.updateCount();
+      // Send current survey config immediately so the student sees the prompt.
+      this.sendConfig(conn);
+    });
+
+    conn.on('data', raw => this.onStudentData(conn, raw));
+
+    conn.on('close', () => { this.conns.delete(conn.peer); this.updateCount(); });
+    conn.on('error', () => { this.conns.delete(conn.peer); this.updateCount(); });
+  },
+
+  onStudentData(conn, msg) {
+    if (!msg || msg.type !== 'DATA_SUBMIT') return;
+    const rec = this.conns.get(conn.peer);
+    if (!rec) return; // ignore data from an unknown/closed connection (late or duplicate frames)
+    // Enforce the teacher's "allow multiple" setting by a PERSISTENT client id so
+    // a refresh/reconnect (which mints a new PeerJS id) can't slip past the limit.
+    const cid = typeof msg.cid === 'string' && msg.cid ? msg.cid : conn.peer;
+    const prior = this.submittedCids.get(cid) || 0;
+    if (!this.config.allowMultiple && prior >= 1) {
+      try { conn.send({ type: 'ACK', ok: false, reason: 'locked' }); } catch (e) {}
+      return;
+    }
+    const parsed = this.parseValue(msg.value);
+    if (parsed === null) { try { conn.send({ type: 'ACK', ok: false, reason: 'invalid' }); } catch (e) {} return; }
+
+    this.addEntry(parsed);
+    this.submittedCids.set(cid, prior + 1);
+    rec.count += 1;
+    try { conn.send({ type: 'ACK', ok: true, allowMultiple: this.config.allowMultiple }); } catch (e) {}
+  },
+
+  sendConfig(conn) {
+    try { conn.send({ type: 'CONFIG', question: this.config.question, dataType: this.config.dataType, allowMultiple: this.config.allowMultiple }); } catch (e) {}
+  },
+  broadcastConfig() { this.conns.forEach(({ conn }) => this.sendConfig(conn)); },
+
+  /* Parse an incoming/manual value according to the configured data type.
+     Strict on purpose: the host trusts the wire, so "12abc" or "1e309" from a
+     non-conforming client must be rejected, not silently coerced. */
+  parseValue(v) {
+    if (this.config.dataType === 'categorical') {
+      let s = String(v ?? '').trim();
+      if (!s) return null;
+      return s.length > 120 ? s.slice(0, 120) : s; // cap length (mild abuse guard)
+    }
+    let num;
+    if (typeof v === 'number') { if (!Number.isFinite(v)) return null; num = v; }
+    else {
+      const str = String(v).trim();
+      if (!/^-?\d*\.?\d+$/.test(str)) return null; // clean decimal only — no e-notation, no trailing junk
+      num = parseFloat(str);
+      if (!Number.isFinite(num)) return null;
+    }
+    return this.config.dataType === 'discrete' ? Math.round(num) : num;
+  },
+
+  addEntry(value) {
+    this.dataset.push({ id: ++this.seq, value, ts: new Date() });
+    this.renderAll(true);
+  },
+  deleteEntry(id) {
+    this.dataset = this.dataset.filter(d => d.id !== id);
+    if (!this.dataset.length) this.binWidth = null;
+    this.renderAll();
+  },
+
+  isCategorical() { return this.config.dataType === 'categorical'; },
+  numericValues() { return this.dataset.filter(d => typeof d.value === 'number').map(d => d.value); },
+
+  /* ---- connection status chip ---- */
+  setConn(state, text) {
+    const dot = $('#t-conn-dot'), map = { starting: '#6a80a3', ok: '#0f9d74', warn: '#c77d16', bad: '#e5484d' };
+    dot.style.background = map[state] || map.starting;
+    dot.classList.toggle('live-dot', state === 'ok');
+    $('#t-conn-text').textContent = text;
+  },
+  updateCount() { $('#t-count').textContent = this.conns.size; },
+
+  /* ---- UI bindings ---- */
+  bindUI() {
+    $('#t-home').onclick = () => location.reload();
+
+    $('#t-copy').onclick = async () => {
+      try { await navigator.clipboard.writeText($('#t-link').value); toast('Join link copied'); }
+      catch (e) { $('#t-link').select(); document.execCommand('copy'); toast('Join link copied'); }
+    };
+
+    // Update the prompt live, but don't blast a CONFIG to every peer on each keystroke.
+    let qTimer = null;
+    $('#cfg-question').oninput = e => {
+      this.config.question = e.target.value;
+      clearTimeout(qTimer); qTimer = setTimeout(() => this.broadcastConfig(), 250);
+    };
+    $('#cfg-type').onchange = e => {
+      this.config.dataType = e.target.value;
+      this.binWidth = null; // scale changed — recompute a sensible default bin width
+      this.setActiveVizForType();
+      this.broadcastConfig();
+      this.renderAll();
+    };
+
+    const multi = $('#cfg-multi');
+    const toggleMulti = () => {
+      this.config.allowMultiple = !this.config.allowMultiple;
+      multi.setAttribute('aria-checked', String(this.config.allowMultiple));
+      multi.classList.toggle('bg-accent', this.config.allowMultiple);
+      multi.classList.toggle('bg-line2', !this.config.allowMultiple);
+      multi.querySelector('span').style.transform = this.config.allowMultiple ? 'translateX(20px)' : '';
+      this.broadcastConfig();
+    };
+    multi.onclick = toggleMulti;
+    multi.onkeydown = e => { if (e.key === ' ' || e.key === 'Enter') { e.preventDefault(); toggleMulti(); } };
+
+    $('#manual-form').onsubmit = e => {
+      e.preventDefault();
+      const input = $('#manual-input');
+      const parsed = this.parseValue(input.value);
+      if (parsed === null) { input.classList.add('!border-bad'); toast('Enter a valid ' + (this.isCategorical() ? 'category' : 'number'), 'bad'); setTimeout(() => input.classList.remove('!border-bad'), 900); return; }
+      this.addEntry(parsed); input.value = ''; input.focus();
+    };
+
+    $('#btn-export').onclick = () => this.exportCSV();
+
+    // Bulk modal
+    $('#btn-bulk').onclick = () => this.openBulk();
+    $('#bulk-close').onclick = $('#bulk-cancel').onclick = () => this.closeBulk();
+    $('#bulk-modal').onclick = e => { if (e.target.id === 'bulk-modal') this.closeBulk(); };
+    // Trap Tab within the dialog so keyboard focus can't wander onto the page behind it.
+    $('#bulk-modal').addEventListener('keydown', e => {
+      if (e.key !== 'Tab') return;
+      const f = $$('#bulk-modal button, #bulk-modal textarea').filter(el => !el.disabled && el.offsetParent !== null);
+      if (!f.length) return;
+      const first = f[0], last = f[f.length - 1];
+      if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+      else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+    });
+    $('#bulk-text').oninput = () => {
+      const vals = this.parseBulk($('#bulk-text').value);
+      $('#bulk-preview').textContent = vals.length ? `${vals.length} value${vals.length > 1 ? 's' : ''} ready to add` : 'Nothing recognized yet';
+    };
+    $('#bulk-add').onclick = () => {
+      const vals = this.parseBulk($('#bulk-text').value);
+      if (!vals.length) { toast('No valid values found', 'bad'); return; }
+      vals.forEach(v => this.dataset.push({ id: ++this.seq, value: v, ts: new Date() }));
+      this.renderAll();
+      this.closeBulk(); $('#bulk-text').value = ''; $('#bulk-preview').textContent = '';
+      toast(`Added ${vals.length} value${vals.length > 1 ? 's' : ''}`);
+    };
+
+    $('#bin-slider').oninput = e => { this.binWidth = +e.target.value; this.renderViz(); };
+
+    window.addEventListener('keydown', e => { if (e.key === 'Escape' && !$('#bulk-modal').classList.contains('hidden')) this.closeBulk(); });
+    window.addEventListener('resize', () => { if (this.activeViz !== 'stem' && this.activeViz !== 'freq') Plotly.Plots.resize($('#chart')); });
+  },
+
+  openBulk() { this._bulkReturn = document.activeElement; $('#bulk-modal').classList.remove('hidden'); setTimeout(() => $('#bulk-text').focus(), 50); },
+  closeBulk() { $('#bulk-modal').classList.add('hidden'); if (this._bulkReturn && this._bulkReturn.focus) this._bulkReturn.focus(); },
+
+  parseBulk(text) {
+    // Categorical values may contain spaces ("New York"), so only split on commas,
+    // semicolons and new lines there; numeric data also splits on spaces.
+    const sep = this.isCategorical() ? /[,;\n\t]+/ : /[\s,;\n\t]+/;
+    const tokens = String(text).split(sep).map(t => t.trim()).filter(Boolean);
+    const out = [];
+    tokens.forEach(t => { const p = this.parseValue(t); if (p !== null) out.push(p); });
+    return out;
+  },
+
+  exportCSV() {
+    if (!this.dataset.length) { toast('No data to export', 'bad'); return; }
+    const esc = s => { s = String(s); return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
+    // Neutralize spreadsheet formula injection: a value like =HYPERLINK(...) is
+    // prefixed with an apostrophe so Excel/Sheets treats it as text, not a formula.
+    const cell = v => { if (typeof v === 'string' && /^[=+\-@\t\r]/.test(v)) v = "'" + v; return esc(v); };
+    const header = ['entry', 'value', 'timestamp'];
+    const rows = this.dataset.map((d, i) => [i + 1, cell(d.value), d.ts.toISOString()].join(','));
+    const csv = [`# StatGather export — ${esc(this.config.question)} (${this.config.dataType})`, header.join(','), ...rows].join('\n');
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = `statgather-${this.code}-${new Date().toISOString().slice(0, 10)}.csv`;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    toast('CSV downloaded');
+  },
+
+  /* ---- master render ---- */
+  renderAll(isNew) {
+    this.renderTable(isNew);
+    this.renderStats();
+    this.renderVizTabs();
+    this.renderViz();
+  },
+
+  renderTable(isNew) {
+    const body = $('#dt-body'), empty = $('#dt-empty');
+    $('#dt-n').textContent = `(${this.dataset.length})`;
+    if (!this.dataset.length) { body.innerHTML = ''; empty.classList.remove('hidden'); return; }
+    empty.classList.add('hidden');
+    // Newest first so incoming responses appear at the top.
+    const rows = this.dataset.slice().reverse();
+    body.innerHTML = rows.map((d, idx) => {
+      const entryNo = this.dataset.length - idx;
+      const t = d.ts.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+      const fresh = isNew && idx === 0 ? 'row-in' : '';
+      return `<tr class="${fresh}" data-id="${d.id}">
+        <td class="mono text-ink3">${entryNo}</td>
+        <td class="mono font-semibold">${typeof d.value === 'number' ? fmt(d.value) : escapeHTML(d.value)}</td>
+        <td class="mono text-ink3 text-xs">${t}</td>
+        <td><button class="del-btn" data-del="${d.id}" title="Delete entry" aria-label="Delete entry ${entryNo}">${iconSVG('trash', 15)}</button></td>
+      </tr>`;
+    }).join('');
+    $$('#dt-body [data-del]').forEach(b => b.onclick = () => this.deleteEntry(+b.dataset.del));
+  },
+
+  renderStats() {
+    const grid = $('#stat-grid'), note = $('#sum-note');
+    // Column count tracks the number of cells so no empty cell is ever left over.
+    // 2 and 5 both divide the 10 numeric cells evenly, so no blank gap-fill cell.
+    const GRID_NUM = 'grid grid-cols-2 xl:grid-cols-5 gap-px bg-line rounded-lg overflow-hidden';
+    const GRID_CAT = 'grid grid-cols-2 sm:grid-cols-4 gap-px bg-line rounded-lg overflow-hidden';
+    grid.className = this.isCategorical() ? GRID_CAT : GRID_NUM;
+    if (this.isCategorical()) {
+      // Categorical summary = frequency table.
+      const counts = this.freq();
+      note.textContent = counts.length ? `${counts.length} categor${counts.length > 1 ? 'ies' : 'y'}` : '';
+      if (!this.dataset.length) { grid.innerHTML = this.statCells([['n', '0']]); return; }
+      const total = this.dataset.length;
+      const cells = [['n', String(total)], ['Categories', String(counts.length)]];
+      const top = counts[0];
+      cells.push(['Mode', top ? top[0] : '—']);
+      cells.push(['Mode share', top ? Math.round(top[1] / total * 100) + '%' : '—']);
+      grid.innerHTML = this.statCells(cells);
+      return;
+    }
+    const s = Stats.compute(this.numericValues());
+    note.textContent = s.n ? (s.outliers.length ? `${s.outliers.length} outlier${s.outliers.length > 1 ? 's' : ''} beyond 1.5·IQR` : 'no outliers') : '';
+    if (!s.n) { grid.innerHTML = this.statCells([['n', '0'], ['Mean', '—'], ['Median', '—'], ['s', '—'], ['IQR', '—']]); return; }
+    grid.innerHTML = this.statCells([
+      ['n', String(s.n)],
+      ['Mean  x̄', fmt(s.mean)],
+      ['Median', fmt(s.median)],
+      ['Std dev  s', s.n < 2 ? '—' : fmt(s.sd)], // sample std is undefined for n<2
+      ['IQR', fmt(s.iqr)],
+      ['Min', fmt(s.min)],
+      ['Q1', fmt(s.q1)],
+      ['Q3', fmt(s.q3)],
+      ['Max', fmt(s.max)],
+      ['Range', fmt(s.range)],
+    ]);
+  },
+  statCells(pairs) {
+    return pairs.map(([label, val]) => `<div class="bg-surface p-3.5">
+      <div class="text-[.66rem] uppercase tracking-[.08em] text-ink2 font-bold whitespace-nowrap">${label}</div>
+      <div class="mono text-[1.35rem] leading-tight font-bold mt-1 text-ink truncate" title="${escapeHTML(val)}">${escapeHTML(val)}</div>
+    </div>`).join('');
+  },
+
+  freq() {
+    const m = new Map();
+    this.dataset.forEach(d => { const k = String(d.value); m.set(k, (m.get(k) || 0) + 1); });
+    return Array.from(m.entries()).sort((a, b) => b[1] - a[1]);
+  },
+
+  /* ---- visualization suite ---- */
+  vizForType() {
+    return this.isCategorical()
+      ? [['bar', 'Bar'], ['pie', 'Pie'], ['freq', 'Frequency']]
+      : [['box', 'Box plot'], ['hist', 'Histogram'], ['dot', 'Dot plot'], ['stem', 'Stem & leaf']];
+  },
+  setActiveVizForType() { this.activeViz = this.vizForType()[0][0]; },
+
+  renderVizTabs() {
+    const tabs = $('#viz-tabs');
+    const list = this.vizForType();
+    if (!list.some(([id]) => id === this.activeViz)) this.activeViz = list[0][0];
+    // Full tablist pattern: aria-controls, roving tabindex, arrow-key movement.
+    tabs.innerHTML = list.map(([id, label]) => {
+      const sel = id === this.activeViz;
+      return `<button class="seg-btn" role="tab" aria-controls="viz-area" aria-selected="${sel}" tabindex="${sel ? 0 : -1}" data-viz="${id}">${label}</button>`;
+    }).join('');
+    const select = (id, focus) => { this.activeViz = id; this.renderVizTabs(); this.renderViz(); if (focus) { const el = $(`#viz-tabs [data-viz="${id}"]`); if (el) el.focus(); } };
+    const btns = $$('#viz-tabs [data-viz]');
+    btns.forEach((b, i) => {
+      b.onclick = () => select(b.dataset.viz, false);
+      b.onkeydown = e => {
+        let ni = null;
+        if (e.key === 'ArrowRight' || e.key === 'ArrowDown') ni = (i + 1) % btns.length;
+        else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') ni = (i - 1 + btns.length) % btns.length;
+        else if (e.key === 'Home') ni = 0;
+        else if (e.key === 'End') ni = btns.length - 1;
+        if (ni !== null) { e.preventDefault(); select(list[ni][0], true); }
+      };
+    });
+  },
+
+  renderViz() {
+    const chart = $('#chart'), stem = $('#stem-area'), empty = $('#viz-empty'), histCtl = $('#hist-controls');
+    const hasData = this.dataset.length > 0;
+    const numeric = this.numericValues();
+    histCtl.classList.toggle('hidden', !(this.activeViz === 'hist' && !this.isCategorical()));
+    histCtl.classList.toggle('flex', this.activeViz === 'hist' && !this.isCategorical() && hasData);
+
+    // stem is HTML, everything else is Plotly (or the freq table)
+    const usePlotly = this.activeViz !== 'stem' && this.activeViz !== 'freq';
+    stem.classList.toggle('hidden', this.activeViz !== 'stem' && this.activeViz !== 'freq');
+    chart.classList.toggle('hidden', !usePlotly);
+
+    if (!hasData) { empty.classList.remove('hidden'); if (usePlotly) Plotly.purge(chart); stem.innerHTML = ''; return; }
+    empty.classList.add('hidden');
+
+    if (this.isCategorical()) {
+      if (this.activeViz === 'bar') this.plotBar();
+      else if (this.activeViz === 'pie') this.plotPie();
+      else this.renderFreqTable();
+      return;
+    }
+    if (!numeric.length) { empty.classList.remove('hidden'); $('#viz-empty-sub').textContent = 'Waiting for numeric responses.'; return; }
+    if (this.activeViz === 'box') this.plotBox(numeric);
+    else if (this.activeViz === 'hist') this.plotHist(numeric);
+    else if (this.activeViz === 'dot') this.plotDot(numeric);
+    else if (this.activeViz === 'stem') this.renderStemLeaf(numeric);
+  },
+
+  baseLayout(extra = {}) {
+    return Object.assign({
+      paper_bgcolor: 'rgba(0,0,0,0)', plot_bgcolor: 'rgba(0,0,0,0)',
+      font: { family: '"Hanken Grotesk", sans-serif', color: CSSVAR('--ink2'), size: 13 },
+      margin: { l: 54, r: 24, t: 20, b: 46 },
+      xaxis: { gridcolor: CSSVAR('--line'), zerolinecolor: CSSVAR('--line2'), linecolor: CSSVAR('--line2'), tickfont: { family: '"JetBrains Mono", monospace' }, automargin: true },
+      yaxis: { gridcolor: CSSVAR('--line'), zerolinecolor: CSSVAR('--line2'), linecolor: CSSVAR('--line2'), tickfont: { family: '"JetBrains Mono", monospace' }, automargin: true },
+      showlegend: false, hoverlabel: { bgcolor: '#0a1f3c', bordercolor: '#0a1f3c', font: { family: '"JetBrains Mono", monospace', color: '#fff' } },
+    }, extra);
+  },
+  cfg: { displaylogo: false, responsive: true, modeBarButtonsToRemove: ['select2d', 'lasso2d', 'autoScale2d', 'toggleSpikelines'] },
+
+  plotBox(xs) {
+    // Plotly's "exclusive" quartile method is exactly the Moore & McCabe
+    // median-of-halves rule our summary panel uses, so the box, its fences, and
+    // the outlier points all agree with the numbers above them.
+    // Horizontal so the value axis matches the histogram and dot plot — the
+    // three numeric views line up on the same scale for side-by-side teaching.
+    const trace = {
+      type: 'box', x: xs, orientation: 'h', name: this.config.question || 'Values',
+      quartilemethod: 'exclusive', boxmean: true,
+      boxpoints: 'suspectedoutliers', jitter: 0.4, pointpos: 0, width: 0.55,
+      marker: { color: CSSVAR('--bad'), size: 6, outliercolor: CSSVAR('--bad'), line: { outliercolor: CSSVAR('--bad'), outlierwidth: 1.5 } },
+      line: { color: CSSVAR('--accentdk'), width: 2 },
+      fillcolor: 'rgba(22,104,227,.16)',
+      hovertemplate: '%{x}<extra></extra>',
+    };
+    Plotly.react($('#chart'), [trace], this.baseLayout({
+      yaxis: { visible: false, range: [-1, 1] },
+      xaxis: { title: { text: this.axisTitle(), font: { size: 12 } }, gridcolor: CSSVAR('--line'), zeroline: false, tickfont: { family: '"JetBrains Mono", monospace' }, automargin: true },
+    }), this.cfg);
+  },
+
+  plotHist(xs) {
+    const s = Stats.compute(xs);
+    // Sensible default bin width from range if the teacher hasn't set one.
+    if (this.binWidth == null) {
+      const span = s.range || 1;
+      const guess = Math.max(1, Math.round(span / Math.min(12, Math.max(4, Math.ceil(Math.sqrt(s.n))))));
+      this.binWidth = guess;
+      const slider = $('#bin-slider'); slider.max = String(Math.max(10, Math.ceil(span))); slider.value = String(guess);
+    }
+    $('#bin-readout').textContent = fmt(this.binWidth);
+    const start = Math.floor(s.min / this.binWidth) * this.binWidth;
+    const trace = {
+      type: 'histogram', x: xs,
+      xbins: { start, end: s.max + this.binWidth, size: this.binWidth },
+      marker: { color: CSSVAR('--accent'), opacity: .9, line: { color: '#fff', width: 1.5 } },
+      hovertemplate: '%{x}: %{y}<extra></extra>',
+    };
+    Plotly.react($('#chart'), [trace], this.baseLayout({
+      bargap: .04,
+      xaxis: { title: { text: this.axisTitle(), font: { size: 12 } }, gridcolor: 'rgba(0,0,0,0)', tickfont: { family: '"JetBrains Mono", monospace' }, automargin: true },
+      yaxis: { title: { text: 'Frequency', font: { size: 12 } }, gridcolor: CSSVAR('--line'), tickfont: { family: '"JetBrains Mono", monospace' }, rangemode: 'tozero', automargin: true },
+    }), this.cfg);
+  },
+
+  plotDot(xs) {
+    // Stack identical/near values along y so each observation is one dot.
+    const sorted = xs.slice().sort((a, b) => a - b);
+    const s = Stats.compute(xs);
+    const span = s.range || 1;
+    const tol = span / 60; // values within this distance share a column
+    const stackY = [], plotX = [], seen = [];
+    sorted.forEach(v => {
+      let col = seen.findIndex(g => Math.abs(g.v - v) <= tol);
+      if (col === -1) { seen.push({ v, n: 0 }); col = seen.length - 1; }
+      stackY.push(++seen[col].n); plotX.push(v);
+    });
+    const trace = {
+      type: 'scatter', mode: 'markers', x: plotX, y: stackY,
+      marker: { color: CSSVAR('--accent'), size: 13, line: { color: '#fff', width: 1.5 }, opacity: .92 },
+      hovertemplate: '%{x}<extra></extra>',
+    };
+    const maxStack = Math.max(1, ...stackY);
+    Plotly.react($('#chart'), [trace], this.baseLayout({
+      xaxis: { title: { text: this.axisTitle(), font: { size: 12 } }, gridcolor: CSSVAR('--line'), zeroline: false, tickfont: { family: '"JetBrains Mono", monospace' }, automargin: true },
+      yaxis: { visible: false, range: [0.3, maxStack + 0.8], fixedrange: true },
+    }), this.cfg);
+  },
+
+  plotBar() {
+    const f = this.freq();
+    const trace = {
+      type: 'bar', x: f.map(d => d[0]), y: f.map(d => d[1]),
+      marker: { color: f.map((_, i) => CSSVAR('--c' + (i % 8))), line: { color: '#fff', width: 1 } },
+      hovertemplate: '%{x}: %{y}<extra></extra>',
+    };
+    Plotly.react($('#chart'), [trace], this.baseLayout({
+      xaxis: { gridcolor: 'rgba(0,0,0,0)', tickfont: { family: '"Hanken Grotesk", sans-serif' }, automargin: true },
+      yaxis: { title: { text: 'Count', font: { size: 12 } }, gridcolor: CSSVAR('--line'), rangemode: 'tozero', tickfont: { family: '"JetBrains Mono", monospace' } },
+    }), this.cfg);
+  },
+
+  plotPie() {
+    const f = this.freq();
+    const trace = {
+      type: 'pie', labels: f.map(d => d[0]), values: f.map(d => d[1]),
+      marker: { colors: f.map((_, i) => CSSVAR('--c' + (i % 8))), line: { color: '#fff', width: 2 } },
+      textfont: { family: '"Hanken Grotesk", sans-serif', size: 14 },
+      hole: .45, sort: false, direction: 'clockwise',
+      hovertemplate: '%{label}: %{value} (%{percent})<extra></extra>',
+    };
+    Plotly.react($('#chart'), [trace], this.baseLayout({ margin: { l: 10, r: 10, t: 10, b: 10 }, showlegend: true, legend: { font: { size: 13 }, orientation: 'v' } }), this.cfg);
+  },
+
+  renderFreqTable() {
+    const f = this.freq(), total = this.dataset.length, stem = $('#stem-area');
+    stem.innerHTML = `<table class="dt"><thead><tr><th>Category</th><th class="w-24 text-right">Count</th><th class="w-28 text-right">Percent</th><th class="w-1/3">Share</th></tr></thead><tbody>${
+      f.map(([k, c], i) => {
+        const pct = (c / total * 100);
+        return `<tr class="row-in"><td class="font-semibold">${escapeHTML(k)}</td>
+          <td class="mono text-right">${c}</td>
+          <td class="mono text-right text-ink2">${pct.toFixed(1)}%</td>
+          <td><div class="h-2.5 rounded-full" style="width:${Math.max(4, pct)}%;background:${CSSVAR('--c' + (i % 8))}"></div></td></tr>`;
+      }).join('')
+    }</tbody></table>`;
+  },
+
+  renderStemLeaf(xs) {
+    const stem = $('#stem-area');
+    // stem = floor(v/10), leaf = v - stem*10 (always 0–9). Using floor rather than
+    // trunc keeps the relation value = stem*10 + leaf true for negatives too, so
+    // -6 (stem -1, leaf 4) and 6 (stem 0, leaf 6) never collide.
+    const rounded = xs.map(v => Math.round(v)).sort((a, b) => a - b);
+    const groups = new Map();
+    rounded.forEach(v => {
+      const stemVal = Math.floor(v / 10);
+      const leaf = v - stemVal * 10;
+      if (!groups.has(stemVal)) groups.set(stemVal, []);
+      groups.get(stemVal).push(leaf);
+    });
+    const stems = Array.from(groups.keys()).sort((a, b) => a - b);
+    const min = stems[0], max = stems[stems.length - 1];
+    let rowsHTML = '';
+    for (let sVal = min; sVal <= max; sVal++) { // fill gaps so the distribution's shape shows
+      const leaves = (groups.get(sVal) || []).sort((a, b) => a - b).join(' ');
+      rowsHTML += `<div class="sl-row"><span class="sl-stem">${sVal}</span><span class="sl-bar"></span><span class="sl-leaves">${leaves || '<span style="color:var(--ink3)">·</span>'}</span></div>`;
+    }
+    // Derive the key from a real value so it is correct even when stems are negative.
+    const kStem = min, kLeaf = (groups.get(min) || [0])[0];
+    stem.innerHTML = `<div class="stemleaf">
+      <div class="text-xs text-ink2 mb-3 font-sans">Stem = tens · Leaf = ones. Key: <span class="mono">${kStem}|${kLeaf}</span> means <span class="mono">${kStem * 10 + kLeaf}</span>.</div>
+      ${rowsHTML}
+    </div>`;
+  },
+
+  axisTitle() { return this.config.question || 'Value'; },
+};
+
+/* small helper */
+function escapeHTML(s) { return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
+
+/* ============================================================================
+   5. STUDENT MODE
+   ============================================================================ */
+const Student = {
+  peer: null, conn: null, code: null,
+  config: { question: '…', dataType: 'continuous', allowMultiple: false },
+  submittedCount: 0, lastValue: null, awaitingAck: false, _token: 0,
+
+  /* A stable id kept in localStorage so the host can recognise this student
+     across refreshes/reconnects and enforce one-response-per-student. */
+  clientId() {
+    try {
+      let id = localStorage.getItem('statgather-cid');
+      if (!id) { id = (crypto.randomUUID ? crypto.randomUUID() : Date.now() + '-' + Math.random().toString(36).slice(2)); localStorage.setItem('statgather-cid', id); }
+      return id;
+    } catch (e) { return (this._cid = this._cid || (Date.now() + '-' + Math.random().toString(36).slice(2))); }
+  },
+
+  enter(prefillCode) {
+    show('student');
+    this.bindUI();
+    if (prefillCode) { $('#s-join-code').value = prefillCode; this.connect(prefillCode); }
+    else this.showStep('join');
+  },
+
+  bindUI() {
+    $('#s-join-form').onsubmit = e => {
+      e.preventDefault();
+      const code = this.cleanCode($('#s-join-code').value);
+      if (code.length !== 4) { $('#s-join-hint').textContent = 'Room codes are exactly 4 characters.'; return; }
+      $('#s-join-hint').textContent = '';
+      this.connect(code);
+    };
+    $('#s-form').onsubmit = e => { e.preventDefault(); this.submit(); };
+    $('#s-again').onclick = () => { this.showStep('submit'); $('#s-value').value = ''; $('#s-value').focus(); this.renderCategoryChoices(); };
+    $('#s-retry').onclick = () => this.connect(this.code || this.cleanCode($('#s-join-code').value));
+    $('#s-value').oninput = () => { $('#s-error').textContent = ''; };
+  },
+
+  cleanCode(v) { return String(v).toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 4); },
+
+  setBadge(state, text) {
+    const dot = $('#s-badge-dot'), badge = $('#s-badge'), map = { connecting: ['#c77d16', 'bg-warnsoft', 'text-warnd'], ok: ['#0f9d74', 'bg-oksoft', 'text-okd'], bad: ['#e5484d', 'bg-badsoft', 'text-badd'] };
+    const [c, bg, tc] = map[state] || map.connecting;
+    dot.style.background = c;
+    dot.classList.toggle('live-dot', state === 'ok');
+    badge.className = 'chip ' + bg + ' ' + tc;
+    badge.innerHTML = `<span id="s-badge-dot" class="w-2 h-2 rounded-full ${state === 'ok' ? 'live-dot' : ''}" style="background:${c}"></span><span id="s-badge-text">${text}</span>`;
+  },
+
+  showStep(step) {
+    ['join', 'submit', 'done', 'error-state'].forEach(s => $('#s-' + s).classList.toggle('hidden', s !== step));
+  },
+
+  connect(code) {
+    this.code = code;
+    $('#s-code').textContent = 'STAT-' + code;
+    this.setBadge('connecting', 'Connecting…');
+    this.showStep('submit');
+    $('#s-question').textContent = 'Connecting to the room…';
+    $('#s-send').disabled = true;
+
+    // Fresh peer each attempt; PeerJS assigns us a random id.
+    try { if (this.peer) this.peer.destroy(); } catch (e) {}
+    this.peer = new Peer({ debug: 1 });
+
+    let settled = false;
+    const failTimer = setTimeout(() => { if (!settled) this.fail('The room didn\'t respond. It may not be running yet.'); }, 12000);
+
+    this.peer.on('open', () => {
+      this.conn = this.peer.connect(PEER_PREFIX + code, { reliable: true });
+
+      this.conn.on('open', () => { settled = true; clearTimeout(failTimer); this.setBadge('ok', 'Connected'); $('#s-send').disabled = false; });
+      this.conn.on('data', msg => this.onData(msg));
+      this.conn.on('close', () => { if (!settled) return; this.setBadge('bad', 'Disconnected'); });
+      this.conn.on('error', () => { if (!settled) { settled = true; clearTimeout(failTimer); this.fail('Couldn\'t open a channel to the room.'); } });
+    });
+
+    this.peer.on('error', err => {
+      console.warn('[StatGather student] peer error:', err.type, err);
+      if (settled) return;
+      settled = true; clearTimeout(failTimer);
+      if (err.type === 'peer-unavailable') this.fail('No session found for code STAT-' + code + '. Check the code with your teacher.');
+      else if (err.type === 'network' || err.type === 'server-error' || err.type === 'socket-error') this.fail('The network seems to be blocking the connection. Ask your teacher for the bulk-entry option.');
+      else this.fail('Something went wrong connecting.');
+    });
+  },
+
+  fail(msg) {
+    this.setBadge('bad', 'Disconnected');
+    $('#s-err-title').textContent = 'Can\'t reach the room';
+    $('#s-err-body').textContent = msg;
+    this.showStep('error-state');
+  },
+
+  onData(msg) {
+    if (!msg) return;
+    if (msg.type === 'CONFIG') {
+      this.config = { question: msg.question || '…', dataType: msg.dataType || 'continuous', allowMultiple: !!msg.allowMultiple };
+      this.applyConfig();
+      // If the student already finished, reflect a mid-session toggle change.
+      if (!$('#s-done').classList.contains('hidden')) this.refreshDone();
+    } else if (msg.type === 'ACK') {
+      if (!this.awaitingAck) return; // ignore late/duplicate ACKs (already resolved or timed out)
+      this.awaitingAck = false;
+      if (msg.ok) {
+        this.submittedCount += 1;
+        this.config.allowMultiple = msg.allowMultiple ?? this.config.allowMultiple;
+        this.showDone();
+      } else {
+        $('#s-send').disabled = false; $('#s-send').textContent = 'Submit response';
+        if (msg.reason === 'locked') { this.showDone(true); }
+        else { $('#s-error').textContent = 'The teacher couldn\'t read that value. Try again.'; }
+      }
+    }
+  },
+
+  applyConfig() {
+    $('#s-question').textContent = this.config.question;
+    const label = { continuous: 'Numerical · continuous', discrete: 'Numerical · discrete', categorical: 'Categorical' }[this.config.dataType];
+    $('#s-type-label').textContent = label;
+    const input = $('#s-value');
+    if (this.config.dataType === 'categorical') { input.type = 'text'; input.placeholder = 'Type your answer'; }
+    else { input.type = 'text'; input.inputMode = 'decimal'; input.placeholder = this.config.dataType === 'discrete' ? 'A whole number' : 'A number'; }
+    this.renderCategoryChoices();
+  },
+
+  // Categorical: no server-known category list, so keep it a free text field but
+  // offer quick chips for categories already seen this session (none by default).
+  renderCategoryChoices() { $('#s-cat-choices').classList.add('hidden'); },
+
+  validate(raw) {
+    const v = raw.trim();
+    if (!v) return { ok: false, msg: 'Enter a response first.' };
+    if (this.config.dataType === 'categorical') return { ok: true, value: v };
+    const num = parseFloat(v);
+    if (!Number.isFinite(num) || !/^-?\d*\.?\d+$/.test(v)) return { ok: false, msg: 'Please enter a number.' };
+    if (this.config.dataType === 'discrete' && !Number.isInteger(num)) return { ok: false, msg: 'Please enter a whole number.' };
+    return { ok: true, value: this.config.dataType === 'discrete' ? Math.round(num) : num };
+  },
+
+  submit() {
+    if (this.awaitingAck) return;
+    if (!this.conn || !this.conn.open) { $('#s-error').textContent = 'Not connected. Reconnecting…'; this.connect(this.code); return; }
+    const res = this.validate($('#s-value').value);
+    if (!res.ok) { $('#s-error').textContent = res.msg; $('#s-value').focus(); return; }
+    this.lastValue = res.value;
+    this.awaitingAck = true;
+    const token = (this._token = this._token + 1);
+    $('#s-send').disabled = true;
+    $('#s-send').innerHTML = `<span class="icon spin" data-icon="broadcast"></span>Sending…`; paintIcons($('#s-send'));
+    try { this.conn.send({ type: 'DATA_SUBMIT', value: res.value, cid: this.clientId() }); }
+    catch (e) { this.awaitingAck = false; $('#s-send').disabled = false; $('#s-send').textContent = 'Submit response'; $('#s-error').textContent = 'Send failed. Try again.'; return; }
+    // If no ACK ever arrives, DON'T claim success — the value may never have
+    // reached the teacher. Show an honest "couldn't confirm" state instead.
+    setTimeout(() => {
+      if (this.awaitingAck && this._token === token) {
+        this.awaitingAck = false;
+        $('#s-send').disabled = false; $('#s-send').textContent = 'Try again';
+        $('#s-error').textContent = 'Couldn\'t confirm your response reached the teacher — check your connection and try again.';
+      }
+    }, 8000);
+  },
+
+  showDone(locked) {
+    $('#s-send').disabled = false; $('#s-send').textContent = 'Submit response';
+    $('#s-done-value').textContent = String(this.lastValue);
+    this.showStep('done');
+    const again = $('#s-again'), lockedMsg = $('#s-locked');
+    const canAgain = this.config.allowMultiple && !locked;
+    again.classList.toggle('hidden', !canAgain);
+    lockedMsg.classList.toggle('hidden', canAgain);
+    lockedMsg.textContent = locked ? 'The teacher has this set to one response per student.' : (this.config.allowMultiple ? '' : 'One response per student for this session.');
+  },
+
+  // Re-evaluate the done-screen actions when the teacher flips "allow multiple"
+  // after this student has already submitted.
+  refreshDone() {
+    const again = $('#s-again'), lockedMsg = $('#s-locked');
+    const canAgain = this.config.allowMultiple;
+    again.classList.toggle('hidden', !canAgain);
+    lockedMsg.classList.toggle('hidden', canAgain);
+    lockedMsg.textContent = canAgain ? '' : 'One response per student for this session.';
+  },
+};
+
+/* ============================================================================
+   6. BOOT
+   ============================================================================ */
+function boot() {
+  ['l', 't', 's'].forEach(k => { const el = $('#brandmark-' + k); if (el) brandmark(el); });
+  paintIcons();
+
+  // Draw the launch-screen preview instrument.
+  drawPreview();
+
+  const params = new URLSearchParams(location.search);
+  const room = params.get('room');
+  if (room) {
+    // Auto-join flow: a ?room= link lands directly in student mode.
+    Student.enter(Student.cleanCode(room));
+  } else {
+    show('launch');
+  }
+
+  // Launch screen actions
+  $('#go-teacher').onclick = () => Teacher.start();
+  $('#join-form').onsubmit = e => {
+    e.preventDefault();
+    const code = Student.cleanCode($('#join-code').value);
+    if (code.length !== 4) { $('#launch-hint').textContent = 'Enter the 4-character room code.'; $('#launch-hint').className = 'text-badd text-sm mt-3 h-5'; return; }
+    Student.enter(code);
+  };
+  $('#join-code').oninput = e => { e.target.value = Student.cleanCode(e.target.value); $('#launch-hint').textContent = ''; };
+}
+
+function drawPreview() {
+  const el = $('#preview-plot'); if (!el || !window.Plotly) return;
+  // Illustrative sample (labelled as a sample in the UI): heights ~ N(65,3.4)
+  const sample = [58,60,61,62,62,63,63,64,64,64,65,65,65,65,66,66,66,67,67,68,68,69,70,72];
+  Plotly.newPlot(el, [{
+    type: 'histogram', x: sample, xbins: { size: 2 },
+    marker: { color: CSSVAR('--accent'), opacity: .92, line: { color: '#fff', width: 1.5 } },
+    hoverinfo: 'skip',
+  }], {
+    paper_bgcolor: 'rgba(0,0,0,0)', plot_bgcolor: 'rgba(0,0,0,0)', bargap: .05,
+    margin: { l: 8, r: 8, t: 6, b: 20 },
+    xaxis: { showgrid: false, zeroline: false, tickfont: { family: '"JetBrains Mono", monospace', size: 10, color: CSSVAR('--ink3') }, fixedrange: true },
+    yaxis: { visible: false, fixedrange: true },
+  }, { displayModeBar: false, staticPlot: true });
+}
+
+if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot); else boot();
+</script>
