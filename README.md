@@ -6,7 +6,7 @@ StatGather is a single-file, serverless web app for teaching statistics. The tea
 
 No accounts. No spreadsheet. No server. No student data is ever stored anywhere but the teacher's screen.
 
-👉 **Live app:** https://hamzaalisayeed-eng.github.io/StatGather/
+👉 **Live app:** https://statgather-app.github.io/
 
 ---
 
@@ -39,7 +39,7 @@ No accounts. No spreadsheet. No server. No student data is ever stored anywhere 
 
 ### Quick start (about 30 seconds)
 
-1. The **teacher** opens the [live app](https://hamzaalisayeed-eng.github.io/StatGather/) and clicks **Host a session**.
+1. The **teacher** opens the [live app](https://statgather-app.github.io/) and clicks **Host a session**.
 2. The teacher types the question (e.g. *"Height in inches"*) and picks a data type.
 3. The teacher clicks **Copy link** and shares it (post it in your LMS, chat, or write the code on the board).
 4. **Students** open the link on their laptops — they connect automatically, type their answer, and hit **Submit**.
