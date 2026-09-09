@@ -6,7 +6,7 @@ StatGather is a single-file, serverless web app for teaching statistics. The tea
 
 No accounts. No spreadsheet. No server. No student data is ever stored anywhere but the teacher's screen.
 
-👉 **Live app:** https://statgather-app.github.io/
+**Live app:** https://statgather-app.github.io/
 
 ---
 
