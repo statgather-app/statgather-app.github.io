@@ -29,8 +29,49 @@
 
 <!-- ── Dependencies (CDN only; runs with no build step, hostable on GitHub Pages) ── -->
 <script src="https://cdn.tailwindcss.com"></script>
-<script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
 <script src="https://cdn.plot.ly/plotly-2.29.0.min.js"></script>
+
+<!-- ── Realtime transport: Trystero (WebRTC over public Nostr relays) ───────────
+     Replaces PeerJS. Peers discover each other through the decentralized Nostr
+     network instead of one signaling server (0.peerjs.com), which locked-down
+     school / enterprise wifi routinely blocks by domain. Student responses still
+     travel directly peer-to-peer, end-to-end encrypted — the relays carry only
+     the tiny connection handshake, and nothing is ever stored. To change how
+     peers find each other (if Nostr relays are blocked too), swap the import
+     below to '.../trystero@0.25.4/mqtt' or '.../torrent'. ---------------------- -->
+<script>
+  /* ICE servers for the peer-to-peer data channel.
+     • STUN lets each peer discover its own public address (free, open, relays no
+       data — hence no credentials).
+     • TURN relays the (already end-to-end-encrypted) WebRTC packets over TCP/443
+       when a firewall blocks direct / UDP connections — this is what makes it
+       work on many school networks. TURN stores nothing; it forwards ciphertext
+       in real time and forgets it. The `turns:…:443?transport=tcp` entry (TURN
+       over TLS on 443, indistinguishable from HTTPS) is the one that clears
+       locked-down school wifi.
+     These are a private metered.ca account's credentials (free tier, 20 GB/month).
+     They are visible in this public page source by design — that's expected for
+     this tier; if they're ever abused, regenerate them in the metered dashboard
+     and paste the new array below. Get/manage at https://www.metered.ca/ */
+  window.RTC_CONFIG = {
+    iceServers: [
+      { urls: 'stun:stun.l.google.com:19302' },
+      { urls: 'stun:stun.relay.metered.ca:80' },
+      { urls: 'turn:standard.relay.metered.ca:80', username: '15015c7957862899af1cf88d', credential: '2gPThXj+KsaNUyNM' },
+      { urls: 'turn:standard.relay.metered.ca:80?transport=tcp', username: '15015c7957862899af1cf88d', credential: '2gPThXj+KsaNUyNM' },
+      { urls: 'turn:standard.relay.metered.ca:443', username: '15015c7957862899af1cf88d', credential: '2gPThXj+KsaNUyNM' },
+      { urls: 'turns:standard.relay.metered.ca:443?transport=tcp', username: '15015c7957862899af1cf88d', credential: '2gPThXj+KsaNUyNM' },
+    ],
+  };
+</script>
+<script type="module">
+  /* Default Trystero export = the Nostr strategy. Loaded as an ES module (which
+     evaluates asynchronously vs. the classic app script below), so we announce
+     readiness via an event the app awaits before joining a room. */
+  import { joinRoom } from 'https://esm.run/trystero@0.25.4';
+  window.Trystero = { joinRoom };
+  window.dispatchEvent(new Event('trystero:ready'));
+</script>
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet" />
@@ -503,8 +544,8 @@
      1. Icons + tiny DOM helpers
      2. Statistics engine (pure functions; documented conventions)
      3. Router / screen switching
-     4. Teacher mode: PeerJS host, config broadcast, table, stats, charts, export
-     5. Student mode: PeerJS client, handshake, validation, submit, states
+     4. Teacher mode: Trystero host, config broadcast, table, stats, charts, export
+     5. Student mode: Trystero client, handshake, validation, submit, states
    ============================================================================ */
 
 /* ── 1. Icons (single-stroke SVG set — no emoji/unicode as icons) ───────────── */
@@ -616,15 +657,24 @@ function makeCode() {
   let c = ''; for (let i = 0; i < 4; i++) c += CODE_ALPHABET[Math.floor(Math.random() * CODE_ALPHABET.length)];
   return c;
 }
-const PEER_PREFIX = 'statgather-';
+/* Trystero namespace — isolates our rooms from other apps sharing the public
+   Nostr relays. The 4-char code is the room id within this namespace. */
+const TRYSTERO_APP_ID = 'statgather-classroom-v1';
 const joinLinkFor = code => location.origin + location.pathname + '?room=' + code;
+/* Trystero is imported as an ES module, which evaluates after this classic
+   script parses; resolve once it has published window.Trystero. */
+function whenTransportReady() {
+  return window.Trystero
+    ? Promise.resolve()
+    : new Promise(res => window.addEventListener('trystero:ready', res, { once: true }));
+}
 
 /* ============================================================================
    4. TEACHER MODE
    ============================================================================ */
 const Teacher = {
-  peer: null, code: null,
-  conns: new Map(),           // conn.peer -> { conn, count }
+  room: null, code: null, actConfig: null, actAck: null,
+  conns: new Map(),           // peerId -> { count }
   submittedCids: new Map(),   // persistent client id -> submission count (survives reconnects)
   dataset: [],                // [{ id, value(number|string), ts }]
   seq: 0,
@@ -647,83 +697,74 @@ const Teacher = {
     $('#t-link').value = joinLinkFor(this.code);
   },
 
-  /* --- PeerJS host: claim a stable id derived from the room code so students
-         can reach us by knowing only the 4-char code. --- */
-  initPeer(attempt = 0) {
+  /* --- Trystero host: join a room named after the 4-char code. Any student who
+         joins the same room discovers us over the Nostr network and opens a
+         direct WebRTC data channel — there's no signaling server to be blocked.
+         The three actions below mirror the old PeerJS message types. --- */
+  async initPeer() {
     this.setConn('starting', 'Starting…');
-    // If the id is already taken on the broker, regenerate the code and retry.
-    this.peer = new Peer(PEER_PREFIX + this.code, { debug: 1 });
+    await whenTransportReady();
+    try {
+      this.room = window.Trystero.joinRoom({ appId: TRYSTERO_APP_ID, rtcConfig: window.RTC_CONFIG }, this.code);
+    } catch (e) {
+      console.warn('[StatGather host] joinRoom failed:', e);
+      this.setConn('bad', "Couldn't start room");
+      toast('Could not start the room — reload to retry.', 'bad');
+      return;
+    }
 
-    this.peer.on('open', () => this.setConn('ok', 'Room live'));
+    this.actConfig = this.room.makeAction('config');
+    this.actAck = this.room.makeAction('ack');
+    const submit = this.room.makeAction('submit');
 
-    this.peer.on('connection', conn => this.onStudentConnect(conn));
+    // Ready to host. (Trystero handles relay reconnection internally; if the
+    // relays themselves are unreachable, no student can join — the bulk/manual
+    // entry remains as the offline fallback.)
+    this.setConn('ok', 'Room live');
 
-    this.peer.on('disconnected', () => {
-      this.setConn('warn', 'Reconnecting…');
-      try { this.peer.reconnect(); } catch (e) {}
-    });
-
-    this.peer.on('error', err => {
-      console.warn('[StatGather host] peer error:', err.type, err);
-      if (err.type === 'unavailable-id' && attempt < 5) {
-        // Code collision — pick a fresh code and try again.
-        this.code = makeCode(); this.renderIdentity();
-        try { this.peer.destroy(); } catch (e) {}
-        return this.initPeer(attempt + 1);
-      }
-      if (err.type === 'unavailable-id') { // exhausted retries — don't leave it on "Starting…"
-        this.setConn('bad', "Couldn't start room");
-        toast('Could not claim a room code — reload to retry.', 'bad');
-        return;
-      }
-      if (err.type === 'network' || err.type === 'server-error' || err.type === 'socket-error') {
-        this.setConn('bad', 'Network blocked');
-        toast('Peer network unreachable — use Bulk or manual entry.', 'bad');
-      } else if (err.type === 'browser-incompatible') {
-        this.setConn('bad', 'Unsupported browser');
-      }
-    });
-  },
-
-  onStudentConnect(conn) {
-    conn.on('open', () => {
-      this.conns.set(conn.peer, { conn, count: 0 });
+    this.room.onPeerJoin = peerId => {
+      this.conns.set(peerId, { count: 0 });
       this.updateCount();
-      // Send current survey config immediately so the student sees the prompt.
-      this.sendConfig(conn);
-    });
-
-    conn.on('data', raw => this.onStudentData(conn, raw));
-
-    conn.on('close', () => { this.conns.delete(conn.peer); this.updateCount(); });
-    conn.on('error', () => { this.conns.delete(conn.peer); this.updateCount(); });
+      this.sendConfig(peerId); // greet the newcomer with the current survey
+    };
+    this.room.onPeerLeave = peerId => {
+      this.conns.delete(peerId);
+      this.updateCount();
+    };
+    submit.onMessage = (msg, { peerId }) => this.onStudentData(peerId, msg);
   },
 
-  onStudentData(conn, msg) {
-    if (!msg || msg.type !== 'DATA_SUBMIT') return;
-    const rec = this.conns.get(conn.peer);
-    if (!rec) return; // ignore data from an unknown/closed connection (late or duplicate frames)
+  onStudentData(peerId, msg) {
+    if (!msg) return;
+    const rec = this.conns.get(peerId);
+    if (!rec) return; // data from an unknown/closed peer (late or duplicate frame)
     // Enforce the teacher's "allow multiple" setting by a PERSISTENT client id so
-    // a refresh/reconnect (which mints a new PeerJS id) can't slip past the limit.
-    const cid = typeof msg.cid === 'string' && msg.cid ? msg.cid : conn.peer;
+    // a refresh/reconnect (which mints a new peer id) can't slip past the limit.
+    const cid = typeof msg.cid === 'string' && msg.cid ? msg.cid : peerId;
     const prior = this.submittedCids.get(cid) || 0;
     if (!this.config.allowMultiple && prior >= 1) {
-      try { conn.send({ type: 'ACK', ok: false, reason: 'locked' }); } catch (e) {}
+      this.sendAck(peerId, { ok: false, reason: 'locked' });
       return;
     }
     const parsed = this.parseValue(msg.value);
-    if (parsed === null) { try { conn.send({ type: 'ACK', ok: false, reason: 'invalid' }); } catch (e) {} return; }
+    if (parsed === null) { this.sendAck(peerId, { ok: false, reason: 'invalid' }); return; }
 
     this.addEntry(parsed);
     this.submittedCids.set(cid, prior + 1);
     rec.count += 1;
-    try { conn.send({ type: 'ACK', ok: true, allowMultiple: this.config.allowMultiple }); } catch (e) {}
+    this.sendAck(peerId, { ok: true, allowMultiple: this.config.allowMultiple });
   },
 
-  sendConfig(conn) {
-    try { conn.send({ type: 'CONFIG', question: this.config.question, dataType: this.config.dataType, allowMultiple: this.config.allowMultiple }); } catch (e) {}
+  sendAck(peerId, payload) { try { this.actAck.send(payload, { target: peerId }); } catch (e) {} },
+
+  /* Send the current survey config. With a target → just that student; without →
+     broadcast to everyone connected (used when the teacher edits the prompt). */
+  sendConfig(target) {
+    if (!this.actConfig) return;
+    const payload = { question: this.config.question, dataType: this.config.dataType, allowMultiple: this.config.allowMultiple };
+    try { this.actConfig.send(payload, target ? { target } : {}); } catch (e) {}
   },
-  broadcastConfig() { this.conns.forEach(({ conn }) => this.sendConfig(conn)); },
+  broadcastConfig() { this.sendConfig(); },
 
   /* Parse an incoming/manual value according to the configured data type.
      Strict on purpose: the host trusts the wire, so "12abc" or "1e309" from a
@@ -1170,7 +1211,7 @@ function escapeHTML(s) { return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp
    5. STUDENT MODE
    ============================================================================ */
 const Student = {
-  peer: null, conn: null, code: null,
+  room: null, actSubmit: null, teacherId: null, code: null,
   config: { question: '…', dataType: 'continuous', allowMultiple: false },
   submittedCount: 0, lastValue: null, awaitingAck: false, _token: 0,
 
@@ -1220,7 +1261,7 @@ const Student = {
     ['join', 'submit', 'done', 'error-state'].forEach(s => $('#s-' + s).classList.toggle('hidden', s !== step));
   },
 
-  connect(code) {
+  async connect(code) {
     this.code = code;
     $('#s-code').textContent = 'STAT-' + code;
     this.setBadge('connecting', 'Connecting…');
@@ -1228,30 +1269,41 @@ const Student = {
     $('#s-question').textContent = 'Connecting to the room…';
     $('#s-send').disabled = true;
 
-    // Fresh peer each attempt; PeerJS assigns us a random id.
-    try { if (this.peer) this.peer.destroy(); } catch (e) {}
-    this.peer = new Peer({ debug: 1 });
+    await whenTransportReady();
+    // Leave any previous room, then join the one named after the code.
+    try { if (this.room) this.room.leave(); } catch (e) {}
+    this.teacherId = null;
+    try {
+      this.room = window.Trystero.joinRoom({ appId: TRYSTERO_APP_ID, rtcConfig: window.RTC_CONFIG }, code);
+    } catch (e) {
+      console.warn('[StatGather student] joinRoom failed:', e);
+      this.fail('Couldn\'t start a connection. Reload and try again.');
+      return;
+    }
+
+    const cfg = this.room.makeAction('config');
+    const ack = this.room.makeAction('ack');
+    this.actSubmit = this.room.makeAction('submit');
 
     let settled = false;
-    const failTimer = setTimeout(() => { if (!settled) this.fail('The room didn\'t respond. It may not be running yet.'); }, 12000);
+    // No response in time means one of: wrong code, teacher isn't hosting yet, or
+    // the network is blocking even the relays. Be honest about all three.
+    const failTimer = setTimeout(() => {
+      if (!settled) this.fail('No session found for code STAT-' + code + '. Check the code with your teacher — the room may not be running yet, or the network may be blocking the connection. Ask for the bulk-entry option if this persists.');
+    }, 15000);
 
-    this.peer.on('open', () => {
-      this.conn = this.peer.connect(PEER_PREFIX + code, { reliable: true });
+    // The teacher is the only peer that sends 'config'; receiving it both
+    // identifies which peer is the teacher and confirms the room is real.
+    cfg.onMessage = (msg, { peerId }) => {
+      this.teacherId = peerId;
+      if (!settled) { settled = true; clearTimeout(failTimer); this.setBadge('ok', 'Connected'); $('#s-send').disabled = false; }
+      this.onConfig(msg);
+    };
+    ack.onMessage = msg => this.onAck(msg);
 
-      this.conn.on('open', () => { settled = true; clearTimeout(failTimer); this.setBadge('ok', 'Connected'); $('#s-send').disabled = false; });
-      this.conn.on('data', msg => this.onData(msg));
-      this.conn.on('close', () => { if (!settled) return; this.setBadge('bad', 'Disconnected'); });
-      this.conn.on('error', () => { if (!settled) { settled = true; clearTimeout(failTimer); this.fail('Couldn\'t open a channel to the room.'); } });
-    });
-
-    this.peer.on('error', err => {
-      console.warn('[StatGather student] peer error:', err.type, err);
-      if (settled) return;
-      settled = true; clearTimeout(failTimer);
-      if (err.type === 'peer-unavailable') this.fail('No session found for code STAT-' + code + '. Check the code with your teacher.');
-      else if (err.type === 'network' || err.type === 'server-error' || err.type === 'socket-error') this.fail('The network seems to be blocking the connection. Ask your teacher for the bulk-entry option.');
-      else this.fail('Something went wrong connecting.');
-    });
+    this.room.onPeerLeave = peerId => {
+      if (settled && peerId === this.teacherId) this.setBadge('bad', 'Disconnected');
+    };
   },
 
   fail(msg) {
@@ -1261,25 +1313,26 @@ const Student = {
     this.showStep('error-state');
   },
 
-  onData(msg) {
+  onConfig(msg) {
     if (!msg) return;
-    if (msg.type === 'CONFIG') {
-      this.config = { question: msg.question || '…', dataType: msg.dataType || 'continuous', allowMultiple: !!msg.allowMultiple };
-      this.applyConfig();
-      // If the student already finished, reflect a mid-session toggle change.
-      if (!$('#s-done').classList.contains('hidden')) this.refreshDone();
-    } else if (msg.type === 'ACK') {
-      if (!this.awaitingAck) return; // ignore late/duplicate ACKs (already resolved or timed out)
-      this.awaitingAck = false;
-      if (msg.ok) {
-        this.submittedCount += 1;
-        this.config.allowMultiple = msg.allowMultiple ?? this.config.allowMultiple;
-        this.showDone();
-      } else {
-        $('#s-send').disabled = false; $('#s-send').textContent = 'Submit response';
-        if (msg.reason === 'locked') { this.showDone(true); }
-        else { $('#s-error').textContent = 'The teacher couldn\'t read that value. Try again.'; }
-      }
+    this.config = { question: msg.question || '…', dataType: msg.dataType || 'continuous', allowMultiple: !!msg.allowMultiple };
+    this.applyConfig();
+    // If the student already finished, reflect a mid-session toggle change.
+    if (!$('#s-done').classList.contains('hidden')) this.refreshDone();
+  },
+
+  onAck(msg) {
+    if (!msg) return;
+    if (!this.awaitingAck) return; // ignore late/duplicate ACKs (already resolved or timed out)
+    this.awaitingAck = false;
+    if (msg.ok) {
+      this.submittedCount += 1;
+      this.config.allowMultiple = msg.allowMultiple ?? this.config.allowMultiple;
+      this.showDone();
+    } else {
+      $('#s-send').disabled = false; $('#s-send').textContent = 'Submit response';
+      if (msg.reason === 'locked') { this.showDone(true); }
+      else { $('#s-error').textContent = 'The teacher couldn\'t read that value. Try again.'; }
     }
   },
 
@@ -1309,7 +1362,7 @@ const Student = {
 
   submit() {
     if (this.awaitingAck) return;
-    if (!this.conn || !this.conn.open) { $('#s-error').textContent = 'Not connected. Reconnecting…'; this.connect(this.code); return; }
+    if (!this.room || !this.teacherId) { $('#s-error').textContent = 'Not connected. Reconnecting…'; this.connect(this.code); return; }
     const res = this.validate($('#s-value').value);
     if (!res.ok) { $('#s-error').textContent = res.msg; $('#s-value').focus(); return; }
     this.lastValue = res.value;
@@ -1317,7 +1370,7 @@ const Student = {
     const token = (this._token = this._token + 1);
     $('#s-send').disabled = true;
     $('#s-send').innerHTML = `<span class="icon spin" data-icon="broadcast"></span>Sending…`; paintIcons($('#s-send'));
-    try { this.conn.send({ type: 'DATA_SUBMIT', value: res.value, cid: this.clientId() }); }
+    try { this.actSubmit.send({ value: res.value, cid: this.clientId() }, { target: this.teacherId }); }
     catch (e) { this.awaitingAck = false; $('#s-send').disabled = false; $('#s-send').textContent = 'Submit response'; $('#s-error').textContent = 'Send failed. Try again.'; return; }
     // If no ACK ever arrives, DON'T claim success — the value may never have
     // reached the teacher. Show an honest "couldn't confirm" state instead.

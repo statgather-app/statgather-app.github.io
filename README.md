@@ -117,7 +117,7 @@ If your badge turns red / says **Disconnected**, click **Try again**, or ask you
 
 ## How it works
 
-- **Peer‑to‑peer, serverless.** Student browsers connect directly to the teacher's browser using [PeerJS](https://peerjs.com/) (WebRTC). There is no backend and no database — the entire app is one static HTML file.
+- **Peer‑to‑peer, serverless.** Student browsers connect directly to the teacher's browser over WebRTC, using [Trystero](https://github.com/dmotz/trystero) to find each other through the decentralized **Nostr** network rather than a single signaling server. There is no backend and no database — the entire app is one static HTML file.
 - **Privacy by design.** Data lives only in the teacher's browser tab for the duration of the session. Closing the tab discards it. Nothing is uploaded or persisted.
 - **Trustworthy math.** Standard deviation is the sample statistic (divides by *n − 1*). Quartiles use the Moore & McCabe "median of halves" method taught in intro/AP statistics, and the box plot is drawn from those same numbers so the chart and the summary panel always agree.
 - **Resilient.** If a school network blocks WebRTC, the teacher can still run the lesson with manual and bulk data entry.
@@ -127,7 +127,7 @@ If your badge turns red / says **Disconnected**, click **Try again**, or ask you
 Plain HTML/CSS/JavaScript — no build step. Loaded from CDNs:
 
 - [Tailwind CSS](https://tailwindcss.com/) — styling
-- [PeerJS](https://peerjs.com/) `1.5.2` — WebRTC data channels
+- [Trystero](https://github.com/dmotz/trystero) `0.25.4` — WebRTC peer matchmaking over public Nostr relays (+ a free TURN relay for locked‑down networks)
 - [Plotly.js](https://plotly.com/javascript/) `2.29.0` — charts
 
 ## Run it locally
@@ -154,7 +154,14 @@ StatGather is designed to be hosted for free on **GitHub Pages** — it's a sing
 | A student submitted twice | **Allow multiple submissions** was on, or they used a different browser/device | Turn the toggle off for one‑per‑student; delete extra rows with the trash icon. The one‑per‑student limit is best‑effort (it can't stop someone using a brand‑new device). |
 | Teacher's data disappeared | The teacher tab was closed or refreshed | Nothing is stored on a server by design. Export to **CSV** periodically if you want a backup. |
 
-**About connectivity:** StatGather uses PeerJS's free public brokering service so peers can find each other. This is ideal for a classroom, but very restrictive networks may block WebRTC entirely — in that case use the built‑in **Bulk manual input** as a fallback. (For a fully self‑contained deployment you can run your own [PeerServer](https://github.com/peers/peerjs-server); the app currently uses the default public broker.)
+**About connectivity:** StatGather uses [Trystero](https://github.com/dmotz/trystero) so peers find each other over the decentralized **Nostr** relay network — there's no single signaling domain (like the old `0.peerjs.com`) for a school firewall to block. The actual responses still travel directly peer‑to‑peer and end‑to‑end encrypted; the relays only carry the tiny connection handshake, and nothing is stored anywhere.
+
+For the peer‑to‑peer data channel itself, the app ships with a free **TURN** server ([metered.ca](https://www.metered.ca/), free tier, 20 GB/month) that relays the already‑encrypted WebRTC packets over **TCP port 443** when a firewall blocks direct/UDP connections — this is what lets it work on many locked‑down school networks. TURN stores nothing. The credentials live in the `RTC_CONFIG` block near the top of `index.html`; they're visible in the public source by design (fine for this tier) and can be regenerated in the metered dashboard if ever abused.
+
+Two things to know:
+
+- **If even the relays are blocked**, or WebRTC is disabled entirely, no student can connect. Fall back to the teacher's **Bulk** paste / **manual add**. You can also try a different discovery network by changing the Trystero import in `index.html` to `.../trystero@0.25.4/mqtt` or `.../torrent`.
+- **Scaling.** Trystero forms a full peer‑to‑peer mesh within a room, so a very large class (roughly 40+) makes many connections. It's fine for a normal class; if a big class sees connection trouble, use the MQTT/torrent strategy or the bulk fallback.
 
 ## License
 
