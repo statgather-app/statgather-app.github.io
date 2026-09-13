@@ -31,14 +31,16 @@
 <script src="https://cdn.tailwindcss.com"></script>
 <script src="https://cdn.plot.ly/plotly-2.29.0.min.js"></script>
 
-<!-- ── Realtime transport: Trystero (WebRTC over public Nostr relays) ───────────
-     Replaces PeerJS. Peers discover each other through the decentralized Nostr
-     network instead of one signaling server (0.peerjs.com), which locked-down
-     school / enterprise wifi routinely blocks by domain. Student responses still
-     travel directly peer-to-peer, end-to-end encrypted — the relays carry only
-     the tiny connection handshake, and nothing is ever stored. To change how
-     peers find each other (if Nostr relays are blocked too), swap the import
-     below to '.../trystero@0.25.4/mqtt' or '.../torrent'. ---------------------- -->
+<!-- ── Realtime transport: Trystero (WebRTC over public MQTT brokers) ───────────
+     Replaces PeerJS. Peers discover each other through public MQTT-over-WebSocket
+     brokers instead of one signaling server (0.peerjs.com), which locked-down
+     school / enterprise wifi routinely blocks by domain. (We started on Trystero's
+     default Nostr relays, but a real school network blocked those too, so this
+     build uses the MQTT strategy — a different set of broker hosts on 443 that
+     the filter didn't catch.) Student responses still travel directly peer-to-
+     peer, end-to-end encrypted — the brokers carry only the tiny connection
+     handshake, and nothing is ever stored. If MQTT is ever blocked as well, swap
+     the import below to '.../trystero@0.25.4/torrent' or back to '.../nostr'. -- -->
 <script>
   /* ICE servers for the peer-to-peer data channel.
      • STUN lets each peer discover its own public address (free, open, relays no
@@ -65,10 +67,11 @@
   };
 </script>
 <script type="module">
-  /* Default Trystero export = the Nostr strategy. Loaded as an ES module (which
-     evaluates asynchronously vs. the classic app script below), so we announce
-     readiness via an event the app awaits before joining a room. */
-  import { joinRoom } from 'https://esm.run/trystero@0.25.4';
+  /* MQTT strategy (peers rendezvous via public MQTT-over-WSS brokers). Loaded as
+     an ES module (which evaluates asynchronously vs. the classic app script
+     below), so we announce readiness via an event the app awaits before joining
+     a room. Swap '/mqtt' for '/nostr' or '/torrent' to change discovery network. */
+  import { joinRoom } from 'https://esm.run/trystero@0.25.4/mqtt';
   window.Trystero = { joinRoom };
   window.dispatchEvent(new Event('trystero:ready'));
 </script>
