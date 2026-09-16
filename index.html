@@ -865,6 +865,54 @@ function availableStrategies() {
   return DISCOVERY_ORDER.filter(n => typeof s[n] === 'function');
 }
 
+/* ── Pinned discovery relays (relayConfig.urls) ──────────────────────────────
+   Trystero's getRelays() returns a passed relayConfig.urls list VERBATIM (its
+   redundancy default is ignored), so pinning a list makes the teacher and every
+   student connect to the SAME full set — guaranteed overlap, and the exact URLs
+   we can probe below.
+
+   Why override the library defaults: a real classroom test proved the defaults
+   don't survive a locked-down school network. Trystero's MQTT default brokers
+   all live on firewall-hostile ports (test.mosquitto.org:8081, emqx:8084,
+   hivemq:8884) — the school dropped every one ("WebSocket … :8081 failed:
+   connack timeout"), so the teacher never announced anywhere the students could
+   see. TURN cleared the same firewall only because it rides TLS/443 and looks
+   like HTTPS. We therefore lean discovery on the strategies that share that
+   property: Nostr relays and WebTorrent trackers speak wss on 443. MQTT stays in
+   the pool for open networks / mobile data (the common case) but can't be
+   counted on through a hostile firewall — that's inherent to public MQTT-over-WS.
+   To change the pool for a network, edit the lists here (these are the URLs the
+   signaling probe reports on, so keep them in sync). */
+const RELAY_URLS = {
+  // Public MQTT-over-WSS brokers. Non-443 ports — reachable on open networks,
+  // typically blocked on locked-down school/enterprise wifi.
+  mqtt: [
+    'wss://broker.emqx.io:8084/mqtt',
+    'wss://test.mosquitto.org:8081/mqtt',
+    'wss://broker.hivemq.com:8884/mqtt',
+  ],
+  // Nostr relays: plain wss on 443, indistinguishable from HTTPS — the best bet
+  // through a hostile firewall. Reputable, high-uptime, open, relay ephemeral
+  // events (what Trystero uses for signaling).
+  nostr: [
+    'wss://relay.damus.io',
+    'wss://nos.lol',
+    'wss://relay.primal.net',
+    'wss://relay.snort.social',
+  ],
+  // WebTorrent trackers: wss on 443.
+  torrent: [
+    'wss://tracker.openwebtorrent.com',
+    'wss://tracker.webtorrent.dev',
+    'wss://tracker.btorrent.xyz',
+  ],
+};
+/* Config passed to every joinRoom() so the teacher and students share one relay
+   set per network. (rtcConfig is added at each call site.) */
+function relayConfigFor(name) {
+  return RELAY_URLS[name] ? { urls: RELAY_URLS[name].slice() } : undefined;
+}
+
 /* ── Independent ICE / TURN self-test ────────────────────────────────────────
    Stands up a throwaway RTCPeerConnection with the SAME ICE config the app uses
    and watches which candidate types it can gather — completely independent of
@@ -894,6 +942,49 @@ function runIceProbe(rtcConfig) {
   });
 }
 
+/* ── Independent signaling-reachability probe ────────────────────────────────
+   The TURN self-test above says nothing about whether the DISCOVERY networks
+   are reachable — those are the ones a school firewall actually blocks, and the
+   old diagnostics couldn't see it: joinRoom() returns synchronously and never
+   throws when its broker/relay WebSocket is silently dropped, so a network sat
+   at "searching…" whether it was connected-with-no-peer or fully blocked.
+
+   This opens a throwaway WebSocket to each pinned relay URL and reports whether
+   the handshake completes. A successful open = the firewall lets that endpoint
+   through (peers can meet there); a timeout/close/error = blocked or down. That
+   turns "no teacher found" from a guess into per-URL evidence. We only care that
+   the socket OPENS — MQTT brokers then expect an MQTT CONNECT, but the open
+   already proves the transport isn't firewalled, which is the whole question. */
+function probeRelay(url, subprotocol, timeoutMs = 8000) {
+  return new Promise(resolve => {
+    // Browsers throw on WebSocket URLs with embedded credentials — strip any.
+    const clean = url.replace(/^(wss?:\/\/)[^@/]*@/, '$1');
+    let ws, done = false, timer;
+    const finish = (ok, detail) => {
+      if (done) return; done = true; clearTimeout(timer);
+      try { ws && ws.close(); } catch (e) {}
+      resolve({ url, ok, detail });
+    };
+    try { ws = subprotocol ? new WebSocket(clean, subprotocol) : new WebSocket(clean); }
+    catch (e) { return resolve({ url, ok: false, detail: String(e) }); }
+    timer = setTimeout(() => finish(false, 'timeout'), timeoutMs);
+    ws.onopen  = () => finish(true, 'open');
+    ws.onerror = () => finish(false, 'error');       // fires for blocked/refused
+    ws.onclose = e => finish(false, 'closed ' + (e && e.code != null ? e.code : ''));
+  });
+}
+/* Probe every relay of every loaded strategy in parallel; resolves to
+   { mqtt:[{url,ok,detail}…], nostr:[…], torrent:[…] }. */
+function runSignalingProbe() {
+  const names = availableStrategies();
+  return Promise.all(names.map(async name => {
+    const urls = RELAY_URLS[name] || [];
+    const sub = name === 'mqtt' ? 'mqtt' : null; // MQTT brokers want the subprotocol on the WS upgrade
+    const results = await Promise.all(urls.map(u => probeRelay(u, sub)));
+    return [name, results];
+  })).then(pairs => Object.fromEntries(pairs));
+}
+
 /* ── On-screen connection diagnostics ────────────────────────────────────────
    A self-contained, collapsible panel (created in JS so it needs no markup in
    the teacher/student views). It surfaces exactly what's happening on the wire —
@@ -901,7 +992,7 @@ function runIceProbe(rtcConfig) {
    so a failed classroom test can be understood WITHOUT opening DevTools. The
    "Copy report" button yields a shareable text summary. */
 const Diag = {
-  panel: null, role: '', strategies: {}, probe: undefined, lines: [], open: true,
+  panel: null, role: '', strategies: {}, probe: undefined, signaling: undefined, lines: [], open: true,
 
   init(role) {
     this.role = role;
@@ -942,6 +1033,7 @@ const Diag = {
 
   setStrategy(name, patch) { this.strategies[name] = Object.assign(this.strategies[name] || {}, patch); this.render(); },
   setProbe(r) { this.probe = r; this.render(); },
+  setSignaling(s) { this.signaling = s; this.render(); },
 
   probeSummary(r) {
     if (!r) return 'running…';
@@ -950,12 +1042,33 @@ const Diag = {
          + ' · TURN ' + (r.relay ? '✓' + (r.relayTcp ? '(tcp)' : '') : '✗');
   },
 
+  /* Signaling reachability for one network: {ok,total} from the last probe, or
+     null if it hasn't run / that network wasn't probed. */
+  sigStat(name) {
+    const arr = this.signaling && this.signaling[name];
+    if (!arr) return null;
+    return { ok: arr.filter(x => x.ok).length, total: arr.length };
+  },
+  /* One-line reachability summary across all probed networks, e.g.
+     "mqtt 0/3 · nostr 3/4 · torrent 2/3". */
+  signalingSummary() {
+    if (!this.signaling) return 'running…';
+    const parts = DISCOVERY_ORDER.filter(n => this.signaling[n]).map(n => {
+      const s = this.sigStat(n); return n + ' ' + s.ok + '/' + s.total;
+    });
+    return parts.join(' · ') || 'none';
+  },
+
   /* Overall LED: green once any network has an actual peer; amber while trying;
-     red once every loaded network has errored. */
+     red once every loaded network is unusable — either failed to load or (per
+     the signaling probe) has no reachable relay for peers to meet on. */
   ledColor() {
-    const vals = Object.values(this.strategies);
-    if (vals.some(s => s.peer)) return '#0f9d74';
-    if (vals.length && vals.every(s => s.error)) return '#e5484d';
+    const names = DISCOVERY_ORDER.filter(n => this.strategies[n]);
+    if (names.some(n => this.strategies[n].peer)) return '#0f9d74';
+    if (names.length && names.every(n => {
+      const s = this.strategies[n], sig = this.sigStat(n);
+      return s.error || (sig && sig.ok === 0); // dead: won't load, or every relay blocked
+    })) return '#e5484d';
     return '#c77d16';
   },
 
@@ -965,9 +1078,18 @@ const Diag = {
     const order = DISCOVERY_ORDER.filter(n => this.strategies[n]);
     const netRows = order.map(n => {
       const s = this.strategies[n];
+      const sig = this.sigStat(n);
+      // While searching, the relay probe disambiguates "connected, no peer yet"
+      // from "every relay blocked" — the distinction the old panel couldn't show.
+      let searching = 'searching…';
+      if (sig) {
+        searching = sig.ok === 0
+          ? '<span style="color:#f2999c;font-weight:700;">blocked 0/' + sig.total + '</span>'
+          : 'searching… <span style="color:#9fb6d6;">(relays ' + sig.ok + '/' + sig.total + ')</span>';
+      }
       const state = s.error ? '<span style="color:#f2999c;">load failed</span>'
         : s.peer ? '<span style="color:#6ee0b8;font-weight:700;">CONNECTED ✓</span>'
-        : s.joined ? '<span style="color:#e9c07a;">searching…</span>'
+        : s.joined ? '<span style="color:#e9c07a;">' + searching + '</span>'
         : '<span style="color:#8aa0c0;">—</span>';
       return '<div style="display:flex;justify-content:space-between;gap:8px;"><span style="color:#9fb6d6;">' + n + '</span>' + state + '</div>';
     }).join('');
@@ -977,10 +1099,21 @@ const Diag = {
         ? '<div style="color:#6ee0b8;margin-top:4px;">TURN reachable — data channel can form.</div>'
         : '<div style="color:#f2999c;margin-top:4px;">TURN unreachable — on a locked-down network the data channel may never form.</div>';
     }
+    // Signaling verdict: no relay reachable anywhere = discovery is firewalled,
+    // which is the failure the TURN test can't see.
+    let sigInterp = '';
+    if (this.signaling) {
+      const anyOk = order.some(n => { const s = this.sigStat(n); return s && s.ok > 0; });
+      sigInterp = anyOk
+        ? '<div style="color:#6ee0b8;margin-top:2px;">Discovery relay reachable — peers can meet.</div>'
+        : '<div style="color:#f2999c;margin-top:2px;">No discovery relay reachable — this network is blocking discovery (TURN alone can\'t connect peers).</div>';
+    }
     this.panel.querySelector('#diag-summary').innerHTML =
       '<div style="color:#9fb6d6;">role: <b style="color:#dbe6f2;">' + (this.role || '—') + '</b></div>'
       + '<div style="margin-top:4px;color:#9fb6d6;">TURN/STUN self-test: <b style="color:#dbe6f2;">' + this.probeSummary(this.probe) + '</b></div>'
       + interp
+      + '<div style="margin-top:4px;color:#9fb6d6;">Discovery relays: <b style="color:#dbe6f2;">' + this.signalingSummary() + '</b></div>'
+      + sigInterp
       + (netRows ? '<div style="margin-top:6px;border-top:1px solid #14315e;padding-top:5px;">' + netRows + '</div>' : '');
     const logEl = this.panel.querySelector('#diag-log');
     logEl.textContent = this.lines.join('\n');
@@ -994,13 +1127,24 @@ const Diag = {
     lines.push('when: ' + new Date().toISOString());
     lines.push('ua: ' + navigator.userAgent);
     lines.push('TURN/STUN self-test: ' + this.probeSummary(this.probe));
+    lines.push('discovery relays reachable: ' + this.signalingSummary());
     lines.push('strategies loaded: ' + (availableStrategies().join(', ') || 'none'));
     const failed = (window.Trystero && window.Trystero.failed) || {};
     if (Object.keys(failed).length) lines.push('strategies failed to load: ' + Object.keys(failed).join(', '));
     DISCOVERY_ORDER.filter(n => this.strategies[n]).forEach(n => {
       const s = this.strategies[n];
-      lines.push('  ' + n + ': ' + (s.error ? 'load failed (' + s.error + ')' : s.peer ? 'CONNECTED' : s.joined ? 'searching' : 'idle'));
+      const sig = this.sigStat(n);
+      const sigTxt = sig ? ' [relays ' + sig.ok + '/' + sig.total + ']' : '';
+      lines.push('  ' + n + ': ' + (s.error ? 'load failed (' + s.error + ')' : s.peer ? 'CONNECTED' : s.joined ? 'searching' : 'idle') + sigTxt);
     });
+    // Per-URL reachability so a failed test names exactly which endpoints the
+    // network blocked — the actionable detail for picking relays.
+    if (this.signaling) {
+      lines.push('--- relay reachability ---');
+      DISCOVERY_ORDER.filter(n => this.signaling[n]).forEach(n => {
+        this.signaling[n].forEach(x => lines.push('  ' + (x.ok ? '✓' : '✗') + ' ' + n + ' ' + x.url + (x.ok ? '' : ' (' + x.detail + ')')));
+      });
+    }
     lines.push('--- log ---');
     return lines.concat(this.lines).join('\n');
   },
@@ -1103,6 +1247,9 @@ const Teacher = {
     Diag.log('Transport ready.');
     // Kick off the independent TURN/STUN self-test (doesn't depend on discovery).
     runIceProbe(window.RTC_CONFIG).then(r => { Diag.setProbe(r); Diag.log('TURN/STUN self-test: ' + Diag.probeSummary(r)); });
+    // …and the independent discovery-reachability probe: which relays this
+    // network actually lets through (the layer a school firewall blocks).
+    runSignalingProbe().then(s => { Diag.setSignaling(s); Diag.log('Discovery relays reachable: ' + Diag.signalingSummary()); });
 
     const names = availableStrategies();
     const failed = Object.keys((window.Trystero && window.Trystero.failed) || {});
@@ -1118,7 +1265,7 @@ const Teacher = {
     for (const name of names) {
       let room;
       try {
-        room = window.Trystero.strategies[name]({ appId: TRYSTERO_APP_ID, rtcConfig: window.RTC_CONFIG }, this.code);
+        room = window.Trystero.strategies[name]({ appId: TRYSTERO_APP_ID, rtcConfig: window.RTC_CONFIG, relayConfig: relayConfigFor(name) }, this.code);
       } catch (e) {
         Diag.setStrategy(name, { error: String(e) });
         Diag.log('[' + name + '] joinRoom failed: ' + e);
@@ -2191,6 +2338,7 @@ const Student = {
     await whenTransportReady();
     Diag.log('Transport ready. Joining STAT-' + code + ' on all networks…');
     runIceProbe(window.RTC_CONFIG).then(r => { Diag.setProbe(r); Diag.log('TURN/STUN self-test: ' + Diag.probeSummary(r)); });
+    runSignalingProbe().then(s => { Diag.setSignaling(s); Diag.log('Discovery relays reachable: ' + Diag.signalingSummary()); });
 
     // Leave any previous rooms, then join the code on every available network.
     this.leaveAll();
@@ -2216,7 +2364,7 @@ const Student = {
     for (const name of names) {
       let room;
       try {
-        room = window.Trystero.strategies[name]({ appId: TRYSTERO_APP_ID, rtcConfig: window.RTC_CONFIG }, code);
+        room = window.Trystero.strategies[name]({ appId: TRYSTERO_APP_ID, rtcConfig: window.RTC_CONFIG, relayConfig: relayConfigFor(name) }, code);
       } catch (e) {
         Diag.setStrategy(name, { error: String(e) });
         Diag.log('[' + name + '] join failed: ' + e);
