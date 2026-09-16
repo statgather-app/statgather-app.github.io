@@ -27,6 +27,8 @@ No accounts. No spreadsheet. No server. No student data is ever stored anywhere 
 - **Export to CSV** at any time.
 - **Bulk paste** or manual entry as a fallback if the school network blocks peer‑to‑peer traffic.
 - Toggle whether students may submit **more than one** response.
+- **Work with several datasets at once** — hold multiple named datasets as tabs and view any one while students keep submitting into the live survey. **Combine** (pool) and **Split** (by threshold or by category) build new datasets **non‑destructively**.
+- **Simulate an experiment** — draw from a probability model (coin, die, spinner, uniform int/real, normal, binomial, poisson, exponential), repeat the trial many times with a **seedable RNG**, and record a statistic (sum, mean, count/proportion by condition, min/max/range/median/sd, category count, distinct, …). The resulting distribution becomes a new dataset that flows into the same summary stats and charts.
 
 ### Student (client)
 - Open the teacher's link (or enter the code) — it connects automatically.
@@ -164,6 +166,26 @@ Two things to know:
 
 - **If all three discovery networks are blocked**, or WebRTC is disabled entirely, no student can connect. The diagnostics panel will show every network failing to reach the teacher (and whether TURN itself is reachable). Fall back to the teacher's **Bulk** paste / **manual add**, and consider adding another Trystero strategy (e.g. `@trystero-p2p/supabase`) to `STRATEGY_URLS`.
 - **Scaling.** Trystero forms a full peer‑to‑peer mesh within a room, so a very large class (roughly 40+) makes many connections. It's fine for a normal class; if a big class sees connection trouble, use the bulk fallback.
+
+## Changelog
+
+### 2026-09-16
+
+Merged two independent lines of work: a connectivity overhaul that keeps sessions alive on locked‑down school networks, and a data‑analysis expansion that turns the single live survey into a multi‑dataset workspace with a built‑in simulation tool.
+
+**Added**
+- **Multi‑network discovery** — teacher and students join a room over **MQTT brokers, Nostr relays, and BitTorrent trackers simultaneously**; the connection forms over whichever transport the firewall doesn't block. Strategies load via `Promise.allSettled`, so one failing network can't take down the others.
+- **On‑screen "Connection diagnostics" panel** (both roles) reporting which networks loaded/connected, plus an independent **TURN/STUN self‑test** and a **Copy report** button — so a failed classroom test is understandable without DevTools.
+- **Multi‑dataset workspace** — hold several named datasets as tabs; **Combine** (pool) and **Split** (by threshold or category) build new datasets non‑destructively while the live survey keeps running.
+- **Simulation tool** — define one trial (draw *n* from a model, record a statistic), repeat *R* times, and the resulting distribution becomes a new dataset that flows into the existing stats and charts. Models: coin, die, spinner, uniform int/real, normal, binomial, poisson, exponential. Seedable RNG for repeatable demos.
+
+**Changed**
+- Discovery switched from the deprecated `trystero@0.25.4/mqtt` subpath to the split `@trystero-p2p/*` packages.
+- Teacher session state (`config`, `dataset`, `seq`, `activeViz`, `binWidth`) is now derived via getters over the active/live dataset, so the multi‑dataset workspace layers on top of the existing transport code without touching it.
+
+**Fixed**
+- **Sessions no longer hang on "Connecting…" on the deployed build.** The deployed build imported `trystero@0.25.4/mqtt`, but in 0.25.x that subpath is deprecated and *throws* on import — so `window.Trystero` was never set and the `trystero:ready` event never fired. Fixed by moving to the split `@trystero-p2p/*` packages.
+- **Cross‑network peer tracking.** Trystero uses one `selfId` per page across all strategies, so the same peerId appears in every room. The teacher now tracks each peer's *set* of rooms (a leave on one network no longer evicts a student still connected on another) and replies over the room a message actually arrived on.
 
 ## License
 
