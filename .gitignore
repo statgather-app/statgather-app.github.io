@@ -2,6 +2,7 @@
 .impeccable/
 PRODUCT.md
 DESIGN.md
+docs/
 
 # OS / editor noise
 .DS_Store
