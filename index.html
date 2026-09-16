@@ -178,6 +178,16 @@
     transition: border-color .15s ease, box-shadow .15s ease;
   }
   .field::placeholder { color: var(--ink3); }
+  .lbl { display: block; font-size: .8rem; font-weight: 600; color: var(--ink2); margin-bottom: .35rem; }
+  /* Dataset workspace tabs */
+  .ds-tab { display: inline-flex; align-items: center; gap: .1rem; border: 1px solid var(--line2); border-radius: 999px; background: var(--surface); overflow: hidden; }
+  .ds-tab.is-active { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(22,104,227,.18); }
+  .ds-pick { display: inline-flex; align-items: center; gap: .4rem; padding: .3rem .75rem; font-size: .82rem; font-weight: 600; color: var(--ink); max-width: 15rem; }
+  .ds-tab.is-active .ds-pick { color: var(--accentdk); }
+  .ds-pick .ds-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 10rem; }
+  .ds-mini { padding: .3rem .4rem; color: var(--ink3); display: inline-flex; }
+  .ds-mini:hover { color: var(--accentdk); background: var(--accentsoft, #e4eefc); }
+  .ds-mini.ds-del:hover { color: var(--bad); background: var(--badsoft); }
   .field:hover { border-color: #b4c8e0; }
   .field:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(22,104,227,.28); }
   select.field { appearance: none; background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%233d557a' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E"); background-repeat: no-repeat; background-position: right .7rem center; padding-right: 2.1rem; }
@@ -326,6 +336,17 @@
       </div>
     </div>
 
+    <!-- Workspace bar: several datasets in one session; view one at a time -->
+    <div class="max-w-[1500px] mx-auto px-5 lg:px-8 pt-5 flex items-center gap-2 flex-wrap">
+      <span class="text-xs font-semibold uppercase tracking-[.12em] text-ink2 mr-1">Datasets</span>
+      <div id="ds-tabs" class="flex items-center gap-1.5 flex-wrap"></div>
+      <span class="w-px h-6 bg-line mx-1"></span>
+      <button id="ds-new" class="btn btn-ghost !py-1.5 px-3 text-sm" title="Create an empty dataset to type or paste values into"><span class="icon" data-icon="plus"></span>Empty</button>
+      <button id="ds-sim" class="btn btn-soft !py-1.5 px-3 text-sm" title="Simulate an experiment with random numbers"><span class="icon" data-icon="dice"></span>Simulate</button>
+      <button id="ds-combine" class="btn btn-ghost !py-1.5 px-3 text-sm" title="Pool two or more datasets into a new one"><span class="icon" data-icon="combine"></span>Combine</button>
+      <button id="ds-split" class="btn btn-ghost !py-1.5 px-3 text-sm" title="Split the current dataset into new ones"><span class="icon" data-icon="split"></span>Split</button>
+    </div>
+
     <div class="max-w-[1500px] mx-auto px-5 lg:px-8 py-6 grid lg:grid-cols-[minmax(340px,420px)_1fr] gap-6 items-start">
 
       <!-- LEFT: setup + data intake -->
@@ -333,7 +354,9 @@
         <!-- Survey configuration -->
         <div class="bg-surface border border-line rounded-xl2 shadow-panel p-5">
           <h2 class="font-bold text-lg mb-1">Survey</h2>
-          <p class="text-ink2 text-sm mb-4">What each student sends in. Changes broadcast to everyone connected.</p>
+          <p class="text-ink2 text-sm mb-2">What each student sends in. Changes broadcast to everyone connected.</p>
+          <p class="text-xs text-ink3 mb-4">Collecting into <span id="cfg-live-name" class="mono font-semibold text-accentdk">—</span>.
+            <button id="cfg-setlive" class="hidden underline text-accentdk hover:text-accent font-semibold">Collect into the dataset you're viewing instead</button></p>
 
           <label class="block text-sm font-semibold text-ink2 mb-1.5" for="cfg-question">Question / prompt</label>
           <input id="cfg-question" class="field mb-4" placeholder="e.g. Height in inches" value="Height in inches" />
@@ -360,8 +383,11 @@
         <!-- Live data table -->
         <div class="bg-surface border border-line rounded-xl2 shadow-panel overflow-hidden">
           <div class="flex items-center justify-between p-5 pb-3">
-            <h2 class="font-bold text-lg">Responses <span id="dt-n" class="mono text-ink3 font-semibold text-base">(0)</span></h2>
-            <div class="flex gap-2">
+            <div class="min-w-0">
+              <h2 class="font-bold text-lg truncate">Responses <span id="dt-n" class="mono text-ink3 font-semibold text-base">(0)</span></h2>
+              <p id="dt-active-name" class="text-xs text-ink3 mono mt-.5 truncate">—</p>
+            </div>
+            <div class="flex gap-2 shrink-0">
               <button id="btn-bulk" class="btn btn-ghost text-sm !py-1.5 px-3" title="Paste many values at once">
                 <span class="icon" data-icon="layers"></span>Bulk
               </button>
@@ -536,6 +562,136 @@
     </div>
   </div>
 
+  <!-- Simulation modal -->
+  <div id="sim-modal" class="hidden fixed inset-0 z-50 modal-back grid place-items-center p-5">
+    <div class="bg-surface w-full max-w-2xl max-h-[92vh] overflow-auto rounded-xl2 shadow-lift border border-line" style="animation:pop .3s cubic-bezier(.16,1,.3,1) both" role="dialog" aria-modal="true" aria-labelledby="sim-title">
+      <div class="flex items-center justify-between p-5 border-b border-line sticky top-0 bg-surface/95 backdrop-blur z-10">
+        <div>
+          <h2 id="sim-title" class="font-bold text-lg">Simulate an experiment</h2>
+          <p class="text-ink3 text-sm">Define one trial, repeat it many times — the results become a new dataset.</p>
+        </div>
+        <button id="sim-close" class="del-btn" aria-label="Close"><span class="icon" data-icon="x"></span></button>
+      </div>
+
+      <div class="p-5 space-y-5">
+        <!-- STEP 1: model -->
+        <div>
+          <div class="text-sm font-bold text-ink mb-1">1 · What does one random draw look like?</div>
+          <select id="sim-model" class="field">
+            <option value="coin">Coin flip — heads with probability p</option>
+            <option value="die">Die roll — 1 to k</option>
+            <option value="spinner">Spinner — custom categories &amp; weights</option>
+            <option value="uniform-int">Random whole number in [a, b]</option>
+            <option value="uniform-real">Random decimal in [a, b]</option>
+            <option value="normal">Normal (μ, σ)</option>
+            <option value="binomial">Binomial (n trials, p)</option>
+            <option value="poisson">Poisson (mean λ)</option>
+            <option value="exponential">Exponential (rate λ)</option>
+          </select>
+
+          <div class="mt-3 grid grid-cols-2 gap-3">
+            <div class="sim-param" data-for="coin">
+              <label class="lbl" for="sim-p">P(heads)</label>
+              <input id="sim-p" type="number" class="field mono" value="0.5" min="0" max="1" step="0.05">
+            </div>
+            <div class="sim-param" data-for="die">
+              <label class="lbl" for="sim-sides">Number of sides (k)</label>
+              <input id="sim-sides" type="number" class="field mono" value="6" min="2" step="1">
+            </div>
+            <div class="sim-param col-span-2" data-for="spinner">
+              <label class="lbl" for="sim-spinner">Categories — one per line as <span class="mono">label, weight</span> (weight optional)</label>
+              <textarea id="sim-spinner" class="field font-mono text-sm h-28 resize-none" placeholder="Red, 2&#10;Green, 1&#10;Blue, 1"></textarea>
+            </div>
+            <div class="sim-param" data-for="uniform-int"><label class="lbl" for="sim-a">Min (a)</label><input id="sim-a" type="number" class="field mono" value="1" step="1"></div>
+            <div class="sim-param" data-for="uniform-int"><label class="lbl" for="sim-b">Max (b)</label><input id="sim-b" type="number" class="field mono" value="6" step="1"></div>
+            <div class="sim-param" data-for="uniform-real"><label class="lbl" for="sim-ra">Min (a)</label><input id="sim-ra" type="number" class="field mono" value="0" step="any"></div>
+            <div class="sim-param" data-for="uniform-real"><label class="lbl" for="sim-rb">Max (b)</label><input id="sim-rb" type="number" class="field mono" value="1" step="any"></div>
+            <div class="sim-param" data-for="normal"><label class="lbl" for="sim-mu">Mean (μ)</label><input id="sim-mu" type="number" class="field mono" value="100" step="any"></div>
+            <div class="sim-param" data-for="normal"><label class="lbl" for="sim-sigma">Std dev (σ)</label><input id="sim-sigma" type="number" class="field mono" value="15" min="0" step="any"></div>
+            <div class="sim-param" data-for="binomial"><label class="lbl" for="sim-bn">Trials (n)</label><input id="sim-bn" type="number" class="field mono" value="10" min="1" step="1"></div>
+            <div class="sim-param" data-for="binomial"><label class="lbl" for="sim-bp">P(success)</label><input id="sim-bp" type="number" class="field mono" value="0.5" min="0" max="1" step="0.05"></div>
+            <div class="sim-param" data-for="poisson"><label class="lbl" for="sim-lambda">Mean (λ)</label><input id="sim-lambda" type="number" class="field mono" value="3" min="0" step="any"></div>
+            <div class="sim-param" data-for="exponential"><label class="lbl" for="sim-elambda">Rate (λ)</label><input id="sim-elambda" type="number" class="field mono" value="1" min="0" step="any"></div>
+          </div>
+        </div>
+
+        <!-- STEP 2: sample size + statistic -->
+        <div>
+          <div class="text-sm font-bold text-ink mb-1">2 · One trial = draw this many, then record…</div>
+          <div class="grid grid-cols-2 gap-3">
+            <div>
+              <label class="lbl" for="sim-n">Draws per trial (n)</label>
+              <input id="sim-n" type="number" class="field mono" value="1" min="1" step="1">
+            </div>
+            <div>
+              <label class="lbl" for="sim-stat">Record</label>
+              <select id="sim-stat" class="field"></select>
+            </div>
+          </div>
+          <!-- numeric condition -->
+          <div id="sim-cond" class="hidden mt-3 grid grid-cols-[1fr_auto_1fr_1fr] items-end gap-2">
+            <div><label class="lbl" for="sim-op">Condition</label>
+              <select id="sim-op" class="field">
+                <option value="eq">is equal to</option>
+                <option value="ne">is not equal to</option>
+                <option value="lt">is less than</option>
+                <option value="le">is ≤</option>
+                <option value="gt">is greater than</option>
+                <option value="ge">is ≥</option>
+                <option value="between">is between</option>
+              </select>
+            </div>
+            <div class="pb-2.5 text-ink3 text-sm"></div>
+            <div><input id="sim-cval" type="number" class="field mono" value="0" step="any"></div>
+            <div id="sim-cval2-wrap" class="hidden"><label class="lbl" for="sim-cval2">and</label><input id="sim-cval2" type="number" class="field mono" value="1" step="any"></div>
+          </div>
+          <!-- categorical target -->
+          <div id="sim-target-wrap" class="hidden mt-3">
+            <label class="lbl" for="sim-target">Which category?</label>
+            <input id="sim-target" class="field" placeholder="e.g. H">
+          </div>
+        </div>
+
+        <!-- STEP 3: repeat -->
+        <div>
+          <div class="text-sm font-bold text-ink mb-1">3 · Repeat the trial</div>
+          <div class="grid grid-cols-2 gap-3">
+            <div><label class="lbl" for="sim-R">Number of trials</label><input id="sim-R" type="number" class="field mono" value="500" min="1" step="1"></div>
+            <div><label class="lbl" for="sim-seed">Seed <span class="text-ink3 font-normal">(optional — repeatable)</span></label><input id="sim-seed" class="field mono" placeholder="blank = random"></div>
+          </div>
+        </div>
+
+        <div class="rounded-lg bg-panel border border-line p-3.5">
+          <p id="sim-desc" class="text-sm text-ink2"></p>
+          <p id="sim-preview" class="text-xs text-ink3 mono mt-2"></p>
+        </div>
+      </div>
+
+      <div class="flex justify-end gap-2 p-5 pt-0">
+        <button id="sim-cancel" class="btn btn-ghost px-4 py-2.5">Cancel</button>
+        <button id="sim-run" class="btn btn-primary px-5 py-2.5"><span class="icon" data-icon="dice"></span>Run simulation</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Combine / Split modal -->
+  <div id="ops-modal" class="hidden fixed inset-0 z-50 modal-back grid place-items-center p-5">
+    <div class="bg-surface w-full max-w-lg max-h-[92vh] overflow-auto rounded-xl2 shadow-lift border border-line" style="animation:pop .3s cubic-bezier(.16,1,.3,1) both" role="dialog" aria-modal="true" aria-labelledby="ops-title">
+      <div class="flex items-center justify-between p-5 border-b border-line">
+        <h2 id="ops-title" class="font-bold text-lg">Combine datasets</h2>
+        <button id="ops-close" class="del-btn" aria-label="Close"><span class="icon" data-icon="x"></span></button>
+      </div>
+      <div class="p-5 space-y-4">
+        <p id="ops-help" class="text-ink2 text-sm"></p>
+        <div id="ops-body" class="space-y-3"></div>
+      </div>
+      <div class="flex justify-end gap-2 p-5 pt-0">
+        <button id="ops-cancel" class="btn btn-ghost px-4 py-2.5">Cancel</button>
+        <button id="ops-run" class="btn btn-primary px-5 py-2.5">Create</button>
+      </div>
+    </div>
+  </div>
+
   <!-- toast host (announced to assistive tech) -->
   <div id="toast-host" role="status" aria-live="polite" aria-atomic="true" class="fixed bottom-5 left-1/2 -translate-x-1/2 z-[60] flex flex-col items-center gap-2 pointer-events-none"></div>
 </div>
@@ -565,6 +721,10 @@ const ICONS = {
   inbox:'<polyline points="22 12 16 12 14 15 10 15 8 12 2 12"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/>',
   chart:'<line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/>',
   alert:'<path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>',
+  dice:'<rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="8.5" cy="8.5" r="1.2" fill="currentColor" stroke="none"/><circle cx="15.5" cy="8.5" r="1.2" fill="currentColor" stroke="none"/><circle cx="8.5" cy="15.5" r="1.2" fill="currentColor" stroke="none"/><circle cx="15.5" cy="15.5" r="1.2" fill="currentColor" stroke="none"/>',
+  combine:'<path d="M7 3v5a4 4 0 0 0 4 4h6"/><path d="M17 3v5a4 4 0 0 1-4 4H7"/><polyline points="14 9 17 12 14 15"/>',
+  split:'<circle cx="6" cy="6" r="3"/><path d="M6 9v6a6 6 0 0 0 6 6"/><circle cx="18" cy="18" r="3"/><path d="M6 9v0a6 6 0 0 0 6 6h1"/><polyline points="15 12 18 15 21 12"/>',
+  edit:'<path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.12 2.12 0 0 1 3 3L12 15l-4 1 1-4z"/>',
 };
 function iconSVG(name, size = 18) {
   const p = ICONS[name] || '';
@@ -679,19 +839,64 @@ const Teacher = {
   room: null, code: null, actConfig: null, actAck: null,
   conns: new Map(),           // peerId -> { count }
   submittedCids: new Map(),   // persistent client id -> submission count (survives reconnects)
-  dataset: [],                // [{ id, value(number|string), ts }]
-  seq: 0,
-  config: { question: 'Height in inches', dataType: 'continuous', allowMultiple: false },
-  activeViz: null,
-  binWidth: null,
+
+  /* ── Workspace: several named datasets in one session (view one at a time) ──
+     Each Dataset = { id, name, origin, config:{question,dataType}, data:[{id,value,ts}],
+     seq, activeViz, binWidth }. We look at one at a time (activeId) and students
+     submit into exactly one (liveId — "the live survey"). Keeping the transport
+     layer's view (this.config / this.dataset / this.seq / this.activeViz /
+     this.binWidth) as getters means initPeer / onStudentData / sendConfig /
+     parseValue never had to change. */
+  datasets: [],
+  activeId: null,             // dataset shown in the table / summary / charts
+  liveId: null,               // dataset students submit into
+  dsSeq: 0,                   // id source for datasets
+  allowMultiple: false,       // session-level resubmission policy (part of the live config)
+
+  activeDS() { return this.datasets.find(d => d.id === this.activeId) || this.datasets[0]; },
+  liveDS()   { return this.datasets.find(d => d.id === this.liveId)   || this.datasets[0]; },
+
+  // Live survey config the transport layer reads (question/type from the live
+  // dataset + the session resubmission policy). Getter → transport code untouched.
+  get config() { const d = this.liveDS(); return { question: d.config.question, dataType: d.config.dataType, allowMultiple: this.allowMultiple }; },
+  // Active-dataset views used by all the render/chart code below.
+  get dataset() { return this.activeDS().data; },
+  set dataset(v) { this.activeDS().data = v; },
+  get seq() { return this.activeDS().seq; },
+  set seq(v) { this.activeDS().seq = v; },
+  get activeViz() { return this.activeDS().activeViz; },
+  set activeViz(v) { this.activeDS().activeViz = v; },
+  get binWidth() { return this.activeDS().binWidth; },
+  set binWidth(v) { this.activeDS().binWidth = v; },
+
+  makeDataset({ name, origin = 'manual', question, dataType = 'continuous', data = [] } = {}) {
+    const id = ++this.dsSeq;
+    const ds = {
+      id, name: name || ('Dataset ' + id), origin,
+      config: { question: question || name || 'Untitled', dataType },
+      data, seq: data.length, activeViz: null, binWidth: null,
+    };
+    ds.activeViz = this.vizForType(dataType)[0][0];
+    return ds;
+  },
+
+  initWorkspace() {
+    // First dataset mirrors the Survey card defaults; it is both live and active.
+    const first = this.makeDataset({ name: 'Class data', origin: 'collected', question: 'Height in inches', dataType: 'continuous' });
+    this.datasets = [first];
+    this.activeId = first.id;
+    this.liveId = first.id;
+  },
 
   start() {
     show('teacher');
     this.code = makeCode();
+    this.initWorkspace();
     this.renderIdentity();
     this.bindUI();
     this.initPeer();
-    this.setActiveVizForType();
+    this.syncSurveyCard();
+    this.renderWorkspace();
     this.renderAll();
   },
 
@@ -789,17 +994,51 @@ const Teacher = {
     return this.config.dataType === 'discrete' ? Math.round(num) : num;
   },
 
+  // Same rules as parseValue, but for an explicit type — used by the manual form
+  // and bulk paste, which target the VIEWED dataset (whose type may differ from
+  // the live survey's).
+  parseValueAs(v, dataType) {
+    if (dataType === 'categorical') {
+      const s = String(v ?? '').trim();
+      if (!s) return null;
+      return s.length > 120 ? s.slice(0, 120) : s;
+    }
+    let num;
+    if (typeof v === 'number') { if (!Number.isFinite(v)) return null; num = v; }
+    else {
+      const str = String(v).trim();
+      if (!/^-?\d*\.?\d+$/.test(str)) return null;
+      num = parseFloat(str);
+      if (!Number.isFinite(num)) return null;
+    }
+    return dataType === 'discrete' ? Math.round(num) : num;
+  },
+
+  // Student submissions always land in the LIVE dataset (kept as addEntry so the
+  // transport code that calls it never changed).
   addEntry(value) {
-    this.dataset.push({ id: ++this.seq, value, ts: new Date() });
+    const d = this.liveDS();
+    d.data.push({ id: ++d.seq, value, ts: new Date() });
+    this.renderWorkspace();
+    // Only touch the heavy table/chart render when the live dataset is the one on screen.
+    if (this.activeId === this.liveId) this.renderAll(true);
+  },
+  // Manual/teacher-entered values go into the dataset currently being VIEWED.
+  addManual(value) {
+    const d = this.activeDS();
+    d.data.push({ id: ++d.seq, value, ts: new Date() });
+    this.renderWorkspace();
     this.renderAll(true);
   },
   deleteEntry(id) {
-    this.dataset = this.dataset.filter(d => d.id !== id);
-    if (!this.dataset.length) this.binWidth = null;
+    const d = this.activeDS();
+    d.data = d.data.filter(x => x.id !== id);
+    if (!d.data.length) d.binWidth = null;
+    this.renderWorkspace();
     this.renderAll();
   },
 
-  isCategorical() { return this.config.dataType === 'categorical'; },
+  isCategorical() { return this.activeDS().config.dataType === 'categorical'; },
   numericValues() { return this.dataset.filter(d => typeof d.value === 'number').map(d => d.value); },
 
   /* ---- connection status chip ---- */
@@ -820,27 +1059,32 @@ const Teacher = {
       catch (e) { $('#t-link').select(); document.execCommand('copy'); toast('Join link copied'); }
     };
 
+    // The Survey card always configures the LIVE dataset (the one students submit
+    // into). Its question/type live on that dataset; allowMultiple is session-wide.
     // Update the prompt live, but don't blast a CONFIG to every peer on each keystroke.
     let qTimer = null;
     $('#cfg-question').oninput = e => {
-      this.config.question = e.target.value;
+      this.liveDS().config.question = e.target.value;
       clearTimeout(qTimer); qTimer = setTimeout(() => this.broadcastConfig(), 250);
+      if (this.activeId === this.liveId) this.renderViz(); // axis titles follow the prompt
     };
     $('#cfg-type').onchange = e => {
-      this.config.dataType = e.target.value;
-      this.binWidth = null; // scale changed — recompute a sensible default bin width
-      this.setActiveVizForType();
+      const d = this.liveDS();
+      d.config.dataType = e.target.value;
+      d.binWidth = null; // scale changed — recompute a sensible default bin width
+      d.activeViz = this.vizForType(d.config.dataType)[0][0];
       this.broadcastConfig();
-      this.renderAll();
+      this.renderWorkspace();
+      if (this.activeId === this.liveId) this.renderAll();
     };
 
     const multi = $('#cfg-multi');
     const toggleMulti = () => {
-      this.config.allowMultiple = !this.config.allowMultiple;
-      multi.setAttribute('aria-checked', String(this.config.allowMultiple));
-      multi.classList.toggle('bg-accent', this.config.allowMultiple);
-      multi.classList.toggle('bg-line2', !this.config.allowMultiple);
-      multi.querySelector('span').style.transform = this.config.allowMultiple ? 'translateX(20px)' : '';
+      this.allowMultiple = !this.allowMultiple;
+      multi.setAttribute('aria-checked', String(this.allowMultiple));
+      multi.classList.toggle('bg-accent', this.allowMultiple);
+      multi.classList.toggle('bg-line2', !this.allowMultiple);
+      multi.querySelector('span').style.transform = this.allowMultiple ? 'translateX(20px)' : '';
       this.broadcastConfig();
     };
     multi.onclick = toggleMulti;
@@ -849,12 +1093,21 @@ const Teacher = {
     $('#manual-form').onsubmit = e => {
       e.preventDefault();
       const input = $('#manual-input');
-      const parsed = this.parseValue(input.value);
+      const parsed = this.parseValueAs(input.value, this.activeDS().config.dataType);
       if (parsed === null) { input.classList.add('!border-bad'); toast('Enter a valid ' + (this.isCategorical() ? 'category' : 'number'), 'bad'); setTimeout(() => input.classList.remove('!border-bad'), 900); return; }
-      this.addEntry(parsed); input.value = ''; input.focus();
+      this.addManual(parsed); input.value = ''; input.focus();
     };
 
     $('#btn-export').onclick = () => this.exportCSV();
+
+    // Workspace + tools
+    $('#ds-new').onclick = () => this.newEmptyDataset();
+    $('#ds-sim').onclick = () => this.openSim();
+    $('#ds-combine').onclick = () => this.openOps('combine');
+    $('#ds-split').onclick = () => this.openOps('split');
+    $('#cfg-setlive').onclick = () => this.setLive(this.activeId);
+    this.bindSim();
+    this.bindOps();
 
     // Bulk modal
     $('#btn-bulk').onclick = () => this.openBulk();
@@ -876,8 +1129,9 @@ const Teacher = {
     $('#bulk-add').onclick = () => {
       const vals = this.parseBulk($('#bulk-text').value);
       if (!vals.length) { toast('No valid values found', 'bad'); return; }
-      vals.forEach(v => this.dataset.push({ id: ++this.seq, value: v, ts: new Date() }));
-      this.renderAll();
+      const d = this.activeDS();
+      vals.forEach(v => d.data.push({ id: ++d.seq, value: v, ts: new Date() }));
+      this.renderWorkspace(); this.renderAll();
       this.closeBulk(); $('#bulk-text').value = ''; $('#bulk-preview').textContent = '';
       toast(`Added ${vals.length} value${vals.length > 1 ? 's' : ''}`);
     };
@@ -894,10 +1148,11 @@ const Teacher = {
   parseBulk(text) {
     // Categorical values may contain spaces ("New York"), so only split on commas,
     // semicolons and new lines there; numeric data also splits on spaces.
-    const sep = this.isCategorical() ? /[,;\n\t]+/ : /[\s,;\n\t]+/;
+    const dtype = this.activeDS().config.dataType;
+    const sep = dtype === 'categorical' ? /[,;\n\t]+/ : /[\s,;\n\t]+/;
     const tokens = String(text).split(sep).map(t => t.trim()).filter(Boolean);
     const out = [];
-    tokens.forEach(t => { const p = this.parseValue(t); if (p !== null) out.push(p); });
+    tokens.forEach(t => { const p = this.parseValueAs(t, dtype); if (p !== null) out.push(p); });
     return out;
   },
 
@@ -908,8 +1163,9 @@ const Teacher = {
     // prefixed with an apostrophe so Excel/Sheets treats it as text, not a formula.
     const cell = v => { if (typeof v === 'string' && /^[=+\-@\t\r]/.test(v)) v = "'" + v; return esc(v); };
     const header = ['entry', 'value', 'timestamp'];
-    const rows = this.dataset.map((d, i) => [i + 1, cell(d.value), d.ts.toISOString()].join(','));
-    const csv = [`# StatGather export — ${esc(this.config.question)} (${this.config.dataType})`, header.join(','), ...rows].join('\n');
+    const ds = this.activeDS();
+    const rows = ds.data.map((d, i) => [i + 1, cell(d.value), d.ts.toISOString()].join(','));
+    const csv = [`# StatGather export — ${esc(ds.name)} · ${esc(ds.config.question)} (${ds.config.dataType})`, header.join(','), ...rows].join('\n');
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -998,8 +1254,8 @@ const Teacher = {
   },
 
   /* ---- visualization suite ---- */
-  vizForType() {
-    return this.isCategorical()
+  vizForType(dataType = this.activeDS().config.dataType) {
+    return dataType === 'categorical'
       ? [['bar', 'Bar'], ['pie', 'Pie'], ['freq', 'Frequency']]
       : [['box', 'Box plot'], ['hist', 'Histogram'], ['dot', 'Dot plot'], ['stem', 'Stem & leaf']];
   },
@@ -1076,7 +1332,7 @@ const Teacher = {
     // Horizontal so the value axis matches the histogram and dot plot — the
     // three numeric views line up on the same scale for side-by-side teaching.
     const trace = {
-      type: 'box', x: xs, orientation: 'h', name: this.config.question || 'Values',
+      type: 'box', x: xs, orientation: 'h', name: this.axisTitle(),
       quartilemethod: 'exclusive', boxmean: true,
       boxpoints: 'suspectedoutliers', jitter: 0.4, pointpos: 0, width: 0.55,
       marker: { color: CSSVAR('--bad'), size: 6, outliercolor: CSSVAR('--bad'), line: { outliercolor: CSSVAR('--bad'), outlierwidth: 1.5 } },
@@ -1204,11 +1460,432 @@ const Teacher = {
     </div>`;
   },
 
-  axisTitle() { return this.config.question || 'Value'; },
+  axisTitle() { return this.activeDS().config.question || 'Value'; },
+
+  /* ========================================================================
+     WORKSPACE — the dataset tab strip and its actions
+     ======================================================================== */
+  renderWorkspace() {
+    if (this._renaming) return; // don't tear down an in-progress inline rename input
+    const wrap = $('#ds-tabs');
+    wrap.innerHTML = this.datasets.map(d => {
+      const isActive = d.id === this.activeId, isLive = d.id === this.liveId;
+      const live = isLive ? `<span class="w-2 h-2 rounded-full bg-ok live-dot" title="Live survey — students submit here"></span>` : '';
+      const canDel = this.datasets.length > 1;
+      return `<span class="ds-tab ${isActive ? 'is-active' : ''}" data-ds="${d.id}">
+        <button class="ds-pick" data-pick="${d.id}" title="View this dataset">${live}<span class="ds-name">${escapeHTML(d.name)}</span><span class="mono text-ink3 text-xs">${d.data.length}</span></button>
+        <button class="ds-mini" data-rename="${d.id}" title="Rename" aria-label="Rename ${escapeHTML(d.name)}">${iconSVG('edit', 13)}</button>
+        ${canDel ? `<button class="ds-mini ds-del" data-del="${d.id}" title="Delete dataset" aria-label="Delete ${escapeHTML(d.name)}">${iconSVG('x', 14)}</button>` : ''}
+      </span>`;
+    }).join('');
+    $$('#ds-tabs [data-pick]').forEach(b => { b.onclick = () => this.selectDataset(+b.dataset.pick); b.ondblclick = () => this.renameDataset(+b.dataset.pick); });
+    $$('#ds-tabs [data-rename]').forEach(b => b.onclick = e => { e.stopPropagation(); this.renameDataset(+b.dataset.rename); });
+    $$('#ds-tabs [data-del]').forEach(b => b.onclick = e => { e.stopPropagation(); this.deleteDataset(+b.dataset.del); });
+    $('#ds-combine').disabled = this.datasets.length < 2;
+    $('#ds-split').disabled = this.activeDS().data.length < 1;
+    this.syncSurveyCard();
+    $('#dt-active-name').textContent = this.activeDS().name + (this.activeId === this.liveId ? ' · live survey' : '');
+  },
+
+  syncSurveyCard() {
+    const live = this.liveDS(), q = $('#cfg-question');
+    if (document.activeElement !== q) q.value = live.config.question; // don't fight the teacher mid-type
+    $('#cfg-type').value = live.config.dataType;
+    $('#cfg-live-name').textContent = live.name;
+    const multi = $('#cfg-multi');
+    multi.setAttribute('aria-checked', String(this.allowMultiple));
+    multi.classList.toggle('bg-accent', this.allowMultiple);
+    multi.classList.toggle('bg-line2', !this.allowMultiple);
+    multi.querySelector('span').style.transform = this.allowMultiple ? 'translateX(20px)' : '';
+    const a = this.activeDS();
+    const canBeLive = this.activeId !== this.liveId && a.origin !== 'sim' && a.origin !== 'derived';
+    $('#cfg-setlive').classList.toggle('hidden', !canBeLive);
+  },
+
+  selectDataset(id) {
+    if (!this.datasets.some(d => d.id === id)) return;
+    this.activeId = id;
+    this.renderWorkspace();
+    this.renderAll();
+    $('#manual-input').placeholder = this.isCategorical() ? 'Add a category manually…' : 'Add a value manually…';
+  },
+
+  newEmptyDataset() {
+    const ds = this.makeDataset({ origin: 'manual', question: 'Untitled', dataType: this.activeDS().config.dataType });
+    this.datasets.push(ds);
+    this.selectDataset(ds.id);
+    toast('New dataset added — type or paste values into it');
+  },
+
+  setLive(id) {
+    const ds = this.datasets.find(d => d.id === id); if (!ds) return;
+    if (ds.origin === 'sim' || ds.origin === 'derived') { toast('Simulated / derived results can’t be a live survey', 'bad'); return; }
+    this.liveId = id;
+    // A new survey → each student may answer it once more.
+    this.submittedCids.clear();
+    this.conns.forEach(r => r.count = 0);
+    this.broadcastConfig();
+    this.renderWorkspace();
+    toast('Now collecting into “' + ds.name + '”');
+  },
+
+  renameDataset(id) {
+    const ds = this.datasets.find(d => d.id === id); if (!ds) return;
+    const tab = $(`#ds-tabs [data-ds="${id}"]`); if (!tab) return;
+    const pick = tab.querySelector('.ds-pick');
+    const input = document.createElement('input');
+    input.className = 'field mono !py-1 !px-2 text-sm'; input.style.width = '10rem';
+    input.value = ds.name;
+    pick.replaceWith(input); input.focus(); input.select();
+    this._renaming = true;
+    const commit = () => { const v = input.value.trim(); if (v) ds.name = v.slice(0, 40); this._renaming = false; this.renderWorkspace(); };
+    input.onblur = commit;
+    input.onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); commit(); } else if (e.key === 'Escape') { this._renaming = false; this.renderWorkspace(); } };
+  },
+
+  deleteDataset(id) {
+    if (this.datasets.length <= 1) { toast('Keep at least one dataset', 'bad'); return; }
+    const idx = this.datasets.findIndex(d => d.id === id); if (idx === -1) return;
+    const wasLive = id === this.liveId, name = this.datasets[idx].name;
+    this.datasets.splice(idx, 1);
+    if (this.activeId === id) this.activeId = this.datasets[Math.max(0, idx - 1)].id;
+    if (wasLive) {
+      const next = this.datasets.find(d => d.origin === 'collected' || d.origin === 'manual') || this.datasets[0];
+      this.liveId = next.id;
+      this.submittedCids.clear();
+      this.broadcastConfig();
+    }
+    this.renderWorkspace();
+    this.renderAll();
+    toast('Deleted “' + name + '”');
+  },
+
+  /* ========================================================================
+     SIMULATION — define one trial, repeat it, keep the distribution
+     ======================================================================== */
+  bindSim() {
+    $('#sim-close').onclick = $('#sim-cancel').onclick = () => this.closeSim();
+    $('#sim-modal').onclick = e => { if (e.target.id === 'sim-modal') this.closeSim(); };
+    $('#sim-model').onchange = () => this.simRefreshUI();
+    $('#sim-stat').onchange = () => this.simRefreshUI();
+    $('#sim-op').onchange = () => this.simRefreshUI();
+    $('#sim-n').oninput = () => this.simRefreshUI();
+    ['#sim-p', '#sim-sides', '#sim-spinner', '#sim-a', '#sim-b', '#sim-ra', '#sim-rb', '#sim-mu', '#sim-sigma', '#sim-bn', '#sim-bp', '#sim-lambda', '#sim-elambda', '#sim-cval', '#sim-cval2', '#sim-target', '#sim-R', '#sim-seed']
+      .forEach(sel => { const el = $(sel); if (el) el.oninput = () => this.simDescribe(); });
+    $('#sim-run').onclick = () => this.runSim();
+    $('#sim-modal').addEventListener('keydown', e => { if (e.key === 'Escape') { this.closeSim(); return; } this.trapTab('#sim-modal', e); });
+  },
+  openSim() { this._simReturn = document.activeElement; $('#sim-modal').classList.remove('hidden'); this.simRefreshUI(); setTimeout(() => $('#sim-model').focus(), 50); },
+  closeSim() { $('#sim-modal').classList.add('hidden'); if (this._simReturn && this._simReturn.focus) this._simReturn.focus(); },
+
+  simStatOptions(model, n) {
+    const dt = Sim.drawType(model), opts = [];
+    if (dt === 'numeric') {
+      if (n <= 1) opts.push(['value', 'Each draw (the value itself)']);
+      opts.push(['sum', 'Sum of the draws'], ['mean', 'Mean of the draws'],
+        ['count', 'Count of draws meeting a condition'], ['prop', 'Proportion meeting a condition'],
+        ['min', 'Minimum'], ['max', 'Maximum'], ['range', 'Range'], ['median', 'Median'], ['sd', 'Standard deviation']);
+    } else {
+      if (n <= 1) opts.push(['value', 'Each draw (the category)']);
+      opts.push(['countCat', 'Count of a chosen category'], ['propCat', 'Proportion of a chosen category'], ['distinct', 'Number of distinct categories']);
+    }
+    return opts;
+  },
+  simRefreshUI() {
+    const model = $('#sim-model').value;
+    $$('#sim-modal .sim-param').forEach(el => el.classList.toggle('hidden', el.dataset.for !== model));
+    const n = Math.max(1, Math.round(+$('#sim-n').value) || 1);
+    const prev = $('#sim-stat').value;
+    const opts = this.simStatOptions(model, n);
+    $('#sim-stat').innerHTML = opts.map(([v, l]) => `<option value="${v}">${l}</option>`).join('');
+    if (opts.some(o => o[0] === prev)) $('#sim-stat').value = prev;
+    const stat = $('#sim-stat').value;
+    $('#sim-cond').classList.toggle('hidden', !(stat === 'count' || stat === 'prop'));
+    $('#sim-target-wrap').classList.toggle('hidden', !(stat === 'countCat' || stat === 'propCat'));
+    $('#sim-cval2-wrap').classList.toggle('hidden', $('#sim-op').value !== 'between');
+    this.simDescribe();
+  },
+
+  readSpinner() {
+    const items = [];
+    $('#sim-spinner').value.split('\n').map(l => l.trim()).filter(Boolean).forEach(l => {
+      const parts = l.split(','); const label = parts[0].trim(); if (!label) return;
+      let w = parts.length > 1 ? parseFloat(parts[1]) : 1; if (!Number.isFinite(w) || w <= 0) w = 1;
+      items.push({ label: label.slice(0, 120), weight: w });
+    });
+    return items;
+  },
+  readSimParams() {
+    const clamp = (x, lo, hi) => Math.min(hi, Math.max(lo, x));
+    const model = $('#sim-model').value, mp = {};
+    if (model === 'coin') mp.p = clamp(+$('#sim-p').value || 0, 0, 1);
+    else if (model === 'die') mp.k = Math.max(2, Math.round(+$('#sim-sides').value) || 6);
+    else if (model === 'spinner') mp.items = this.readSpinner();
+    else if (model === 'uniform-int') { mp.a = Math.round(+$('#sim-a').value); mp.b = Math.round(+$('#sim-b').value); if (mp.b < mp.a) [mp.a, mp.b] = [mp.b, mp.a]; }
+    else if (model === 'uniform-real') { mp.a = +$('#sim-ra').value; mp.b = +$('#sim-rb').value; if (mp.b < mp.a) [mp.a, mp.b] = [mp.b, mp.a]; }
+    else if (model === 'normal') { mp.mu = +$('#sim-mu').value || 0; mp.sigma = Math.max(0, +$('#sim-sigma').value || 0); }
+    else if (model === 'binomial') { mp.n = Math.max(1, Math.round(+$('#sim-bn').value) || 1); mp.p = clamp(+$('#sim-bp').value || 0, 0, 1); }
+    else if (model === 'poisson') mp.lambda = Math.max(0, +$('#sim-lambda').value || 0);
+    else if (model === 'exponential') mp.lambda = Math.max(1e-9, +$('#sim-elambda').value || 1);
+    const n = Math.max(1, Math.round(+$('#sim-n').value) || 1);
+    const statistic = $('#sim-stat').value;
+    const condition = { op: $('#sim-op').value, value: +$('#sim-cval').value || 0, value2: +$('#sim-cval2').value || 0 };
+    const target = $('#sim-target').value.trim();
+    const R = Math.max(1, Math.round(+$('#sim-R').value) || 1);
+    const raw = $('#sim-seed').value.trim();
+    const seed = raw === '' ? null : (/^-?\d+$/.test(raw) ? +raw : raw);
+    return { model, modelParams: mp, n, statistic, condition, target, R, seed };
+  },
+
+  condText(c) {
+    const sym = { eq: '=', ne: '≠', lt: '<', le: '≤', gt: '>', ge: '≥' }[c.op];
+    return c.op === 'between' ? `∈[${fmt(c.value)}, ${fmt(c.value2)}]` : `${sym} ${fmt(c.value)}`;
+  },
+  modelLabel(p) {
+    const m = p.model, mp = p.modelParams;
+    return ({ coin: `coin (p=${fmt(mp.p)})`, die: `d${mp.k}`, spinner: 'spinner',
+      'uniform-int': `int[${fmt(mp.a)},${fmt(mp.b)}]`, 'uniform-real': `real[${fmt(mp.a)},${fmt(mp.b)}]`,
+      normal: `N(${fmt(mp.mu)}, ${fmt(mp.sigma)})`, binomial: `Binom(${mp.n}, ${fmt(mp.p)})`,
+      poisson: `Pois(λ=${fmt(mp.lambda)})`, exponential: `Exp(λ=${fmt(mp.lambda)})` })[m] || m;
+  },
+  statLabel(p) {
+    switch (p.statistic) {
+      case 'value': return 'value'; case 'sum': return 'sum'; case 'mean': return 'mean';
+      case 'count': return `count(${this.condText(p.condition)})`; case 'prop': return `prop(${this.condText(p.condition)})`;
+      case 'min': return 'min'; case 'max': return 'max'; case 'range': return 'range';
+      case 'median': return 'median'; case 'sd': return 'std dev';
+      case 'countCat': return `count of “${p.target}”`; case 'propCat': return `prop of “${p.target}”`;
+      case 'distinct': return '# distinct';
+    }
+    return p.statistic;
+  },
+  simQuestion(p) { return p.statistic === 'value' ? `${this.modelLabel(p)} draw` : `${this.statLabel(p)} of ${p.n} × ${this.modelLabel(p)}`; },
+  simName(p) { return (`Sim: ${p.statistic === 'value' ? this.modelLabel(p) : this.statLabel(p) + ' of ' + p.n + '×' + this.modelLabel(p)} (${p.R}×)`).slice(0, 48); },
+
+  simDescribe() {
+    const p = this.readSimParams();
+    const desc = $('#sim-desc'), prev = $('#sim-preview');
+    desc.textContent = p.statistic === 'value'
+      ? `One trial: draw 1 value from ${this.modelLabel(p)}. Repeat ${p.R.toLocaleString()}×. → a dataset of ${p.R.toLocaleString()} draws.`
+      : `One trial: draw ${p.n} from ${this.modelLabel(p)}, record the ${this.statLabel(p)}. Repeat ${p.R.toLocaleString()}×. → a dataset of ${p.R.toLocaleString()} trial results.`;
+    try {
+      if (p.model === 'spinner' && !p.modelParams.items.length) { prev.textContent = 'Add at least one spinner category.'; return; }
+      const rnd = RNG.make(p.seed === null ? 1 : p.seed);
+      const { draws, stat } = Sim.oneTrial(p, rnd);
+      const show = draws.slice(0, 10).map(d => typeof d === 'number' ? fmt(d) : d).join(', ') + (draws.length > 10 ? ', …' : '');
+      prev.textContent = `Example trial → draws: ${show}` + (p.statistic !== 'value' ? `  ⇒  ${this.statLabel(p)} = ${typeof stat === 'number' ? fmt(stat) : stat}` : '');
+    } catch (e) { prev.textContent = ''; }
+  },
+
+  runSim() {
+    const p = this.readSimParams();
+    if (p.model === 'spinner' && !p.modelParams.items.length) { toast('Add at least one spinner category', 'bad'); return; }
+    if ((p.statistic === 'countCat' || p.statistic === 'propCat') && !p.target) { toast('Type which category to count', 'bad'); return; }
+    if (p.R > 100000) { toast('Keep trials at 100,000 or fewer', 'bad'); return; }
+    if (p.n > 10000) { toast('Keep draws per trial at 10,000 or fewer', 'bad'); return; }
+    let out;
+    try { out = Sim.run(p); } catch (e) { console.warn('[StatGather sim]', e); toast('Simulation failed — check the settings', 'bad'); return; }
+    const ds = this.makeDataset({ name: this.simName(p), origin: 'sim', question: this.simQuestion(p), dataType: out.dataType });
+    ds.data = out.values.map((v, i) => ({ id: i + 1, value: v, ts: new Date() }));
+    ds.seq = ds.data.length;
+    this.datasets.push(ds);
+    this.closeSim();
+    this.selectDataset(ds.id);
+    toast(`Simulated ${p.R.toLocaleString()} trials`);
+  },
+
+  /* ========================================================================
+     COMBINE / SPLIT — non-destructive; each makes new dataset(s)
+     ======================================================================== */
+  bindOps() {
+    $('#ops-close').onclick = $('#ops-cancel').onclick = () => this.closeOps();
+    $('#ops-modal').onclick = e => { if (e.target.id === 'ops-modal') this.closeOps(); };
+    $('#ops-run').onclick = () => this.opsRun();
+    $('#ops-modal').addEventListener('keydown', e => { if (e.key === 'Escape') { this.closeOps(); return; } this.trapTab('#ops-modal', e); });
+  },
+  closeOps() { $('#ops-modal').classList.add('hidden'); if (this._opsReturn && this._opsReturn.focus) this._opsReturn.focus(); },
+  openOps(mode) {
+    this._opsMode = mode;
+    const title = $('#ops-title'), help = $('#ops-help'), body = $('#ops-body');
+    if (mode === 'combine') {
+      if (this.datasets.length < 2) { toast('Need at least two datasets to combine', 'bad'); return; }
+      title.textContent = 'Combine datasets';
+      help.textContent = 'Pool two or more datasets into a new one. They must be the same kind — all numeric, or all categorical.';
+      body.innerHTML = this.datasets.map(d => { const kind = d.config.dataType === 'categorical' ? 'categorical' : 'numeric';
+        return `<label class="flex items-center gap-2 p-2 rounded-lg hover:bg-panel cursor-pointer"><input type="checkbox" class="ops-pick accent-accent w-4 h-4" value="${d.id}" ${d.id === this.activeId ? 'checked' : ''}><span class="ds-name">${escapeHTML(d.name)}</span><span class="mono text-ink3 text-xs">${kind}, n=${d.data.length}</span></label>`; }).join('');
+      $('#ops-run').textContent = 'Pool into new dataset';
+    } else {
+      const a = this.activeDS();
+      if (!a.data.length) { toast('The viewed dataset is empty', 'bad'); return; }
+      title.textContent = 'Split dataset';
+      if (a.config.dataType === 'categorical') {
+        const cats = Array.from(new Set(a.data.map(d => String(d.value))));
+        help.textContent = `Split “${a.name}” into one dataset per category.`;
+        body.innerHTML = `<div class="space-y-1.5 max-h-56 overflow-auto">${cats.map(c => `<label class="flex items-center gap-2"><input type="checkbox" class="ops-cat accent-accent w-4 h-4" value="${escapeHTML(c)}" checked><span>${escapeHTML(c)}</span></label>`).join('')}</div>`;
+      } else {
+        const s = Stats.compute(a.data.filter(d => typeof d.value === 'number').map(d => d.value));
+        help.textContent = `Split “${a.name}” at a threshold into two datasets (≤ t and > t).`;
+        body.innerHTML = `<label class="lbl" for="ops-thresh">Threshold (t)</label><input id="ops-thresh" type="number" class="field mono" value="${Number.isFinite(s.median) ? fmt(s.median) : 0}" step="any"><p class="text-ink3 text-xs mt-1">The median is filled in by default.</p>`;
+      }
+      $('#ops-run').textContent = 'Create split datasets';
+    }
+    this._opsReturn = document.activeElement;
+    $('#ops-modal').classList.remove('hidden');
+    setTimeout(() => { const f = $('#ops-modal input'); if (f) f.focus(); }, 50);
+  },
+  opsRun() {
+    if (this._opsMode === 'combine') {
+      const ids = $$('#ops-modal .ops-pick:checked').map(c => +c.value);
+      if (ids.length < 2) { toast('Pick at least two datasets', 'bad'); return; }
+      const picked = ids.map(id => this.datasets.find(d => d.id === id)).filter(Boolean);
+      const kinds = new Set(picked.map(d => d.config.dataType === 'categorical' ? 'categorical' : 'numeric'));
+      if (kinds.size > 1) { toast('Can’t pool numeric with categorical data', 'bad'); return; }
+      const dataType = kinds.has('categorical') ? 'categorical' : (picked.some(d => d.config.dataType === 'continuous') ? 'continuous' : 'discrete');
+      const name = 'Pooled: ' + picked.map(d => d.name).join(' + ');
+      const ds = this.makeDataset({ name: name.slice(0, 60), origin: 'derived', question: name, dataType });
+      let seq = 0;
+      picked.forEach(d => d.data.forEach(x => ds.data.push({ id: ++seq, value: x.value, ts: new Date() })));
+      ds.seq = seq;
+      this.datasets.push(ds); this.closeOps(); this.selectDataset(ds.id);
+      toast(`Pooled ${ds.data.length} values`);
+    } else {
+      const a = this.activeDS();
+      if (a.config.dataType === 'categorical') {
+        const cats = $$('#ops-modal .ops-cat:checked').map(c => c.value);
+        if (!cats.length) { toast('Pick at least one category', 'bad'); return; }
+        let made = 0;
+        cats.forEach(cat => {
+          const vals = a.data.filter(d => String(d.value) === cat); if (!vals.length) return;
+          const ds = this.makeDataset({ name: `${a.name} = ${cat}`.slice(0, 60), origin: 'derived', question: `${a.config.question} (${cat})`, dataType: 'categorical' });
+          vals.forEach((x, i) => ds.data.push({ id: i + 1, value: x.value, ts: new Date() })); ds.seq = ds.data.length;
+          this.datasets.push(ds); made++;
+        });
+        this.closeOps(); this.renderWorkspace(); this.renderAll();
+        toast(`Created ${made} dataset${made > 1 ? 's' : ''}`);
+      } else {
+        const t = +$('#ops-thresh').value;
+        if (!Number.isFinite(t)) { toast('Enter a numeric threshold', 'bad'); return; }
+        const dt = a.config.dataType;
+        const mk = (suffix, pred) => {
+          const ds = this.makeDataset({ name: `${a.name} ${suffix}`.slice(0, 60), origin: 'derived', question: `${a.config.question} ${suffix}`, dataType: dt });
+          a.data.filter(d => typeof d.value === 'number' && pred(d.value)).forEach((x, i) => ds.data.push({ id: i + 1, value: x.value, ts: new Date() }));
+          ds.seq = ds.data.length; return ds;
+        };
+        const lo = mk(`≤ ${fmt(t)}`, v => v <= t), hi = mk(`> ${fmt(t)}`, v => v > t);
+        if (!lo.data.length || !hi.data.length) { toast('That threshold puts every value on one side', 'bad'); return; }
+        this.datasets.push(lo, hi); this.closeOps(); this.selectDataset(lo.id);
+        toast('Split into two datasets');
+      }
+    }
+  },
+
+  trapTab(sel, e) {
+    if (e.key !== 'Tab') return;
+    const f = $$(`${sel} button, ${sel} input, ${sel} select, ${sel} textarea`).filter(el => !el.disabled && el.offsetParent !== null);
+    if (!f.length) return;
+    const first = f[0], last = f[f.length - 1];
+    if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+    else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+  },
 };
 
 /* small helper */
 function escapeHTML(s) { return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
+
+/* ============================================================================
+   SIMULATION ENGINE  (pure — no DOM). Teacher.runSim feeds it params from the
+   modal and turns its output into a dataset.
+   Model: one TRIAL draws n values from a chosen random model and reduces them to
+   ONE statistic; repeating R times gives the distribution of that statistic —
+   the sampling-distribution idea at the centre of intro/AP statistics.
+   ============================================================================ */
+const RNG = {
+  // mulberry32 — a tiny, fast, seedable PRNG. Seeded → repeatable class demos;
+  // no seed → Math.random. A string seed is hashed to 32 bits first.
+  make(seed) {
+    if (seed === null || seed === undefined || seed === '') return Math.random;
+    let a = (typeof seed === 'number' ? seed : this.hash(String(seed))) >>> 0;
+    return function () {
+      a |= 0; a = (a + 0x6D2B79F5) | 0;
+      let t = Math.imul(a ^ (a >>> 15), 1 | a);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  },
+  hash(str) { let h = 2166136261 >>> 0; for (let i = 0; i < str.length; i++) { h ^= str.charCodeAt(i); h = Math.imul(h, 16777619); } return h >>> 0; },
+};
+
+const Sim = {
+  drawType(model) { return (model === 'coin' || model === 'spinner') ? 'categorical' : 'numeric'; },
+  isInteger(model) { return ['die', 'uniform-int', 'binomial', 'poisson'].includes(model); },
+  // one standard-normal deviate (Box–Muller)
+  gaussian(rnd) { let u = 0, v = 0; while (!u) u = rnd(); while (!v) v = rnd(); return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v); },
+  drawOne(model, mp, rnd) {
+    switch (model) {
+      case 'coin': return rnd() < mp.p ? 'H' : 'T';
+      case 'die': return 1 + Math.floor(rnd() * mp.k);
+      case 'spinner': { const total = mp.items.reduce((a, b) => a + b.weight, 0); let r = rnd() * total; for (const it of mp.items) { r -= it.weight; if (r < 0) return it.label; } return mp.items[mp.items.length - 1].label; }
+      case 'uniform-int': return mp.a + Math.floor(rnd() * (mp.b - mp.a + 1));
+      case 'uniform-real': return mp.a + rnd() * (mp.b - mp.a);
+      case 'normal': return mp.mu + mp.sigma * this.gaussian(rnd);
+      case 'binomial': { let s = 0; for (let i = 0; i < mp.n; i++) if (rnd() < mp.p) s++; return s; }
+      case 'poisson': { const L = Math.exp(-mp.lambda); let k = 0, p = 1; do { k++; p *= rnd(); } while (p > L); return k - 1; }
+      case 'exponential': return -Math.log(1 - rnd()) / mp.lambda;
+      default: return rnd();
+    }
+  },
+  cond(d, c) {
+    switch (c.op) {
+      case 'eq': return d === c.value; case 'ne': return d !== c.value;
+      case 'lt': return d < c.value; case 'le': return d <= c.value;
+      case 'gt': return d > c.value; case 'ge': return d >= c.value;
+      case 'between': return d >= c.value && d <= c.value2;
+    }
+    return false;
+  },
+  reduce(draws, p) {
+    const n = draws.length;
+    if (p.statistic === 'value') return draws[0];
+    if (this.drawType(p.model) === 'numeric') {
+      switch (p.statistic) {
+        case 'sum': return draws.reduce((a, b) => a + b, 0);
+        case 'mean': return draws.reduce((a, b) => a + b, 0) / n;
+        case 'count': return draws.filter(d => this.cond(d, p.condition)).length;
+        case 'prop': return draws.filter(d => this.cond(d, p.condition)).length / n;
+        case 'min': return Math.min.apply(null, draws);
+        case 'max': return Math.max.apply(null, draws);
+        case 'range': return Math.max.apply(null, draws) - Math.min.apply(null, draws);
+        case 'median': return Stats.median(draws.slice().sort((a, b) => a - b));
+        case 'sd': return Stats.compute(draws).sd;
+      }
+    } else {
+      switch (p.statistic) {
+        case 'countCat': return draws.filter(d => d === p.target).length;
+        case 'propCat': return draws.filter(d => d === p.target).length / n;
+        case 'distinct': return new Set(draws).size;
+      }
+    }
+    return NaN;
+  },
+  outputType(p) {
+    if (p.statistic === 'value') return this.drawType(p.model) === 'categorical' ? 'categorical' : (this.isInteger(p.model) ? 'discrete' : 'continuous');
+    if (['count', 'distinct', 'countCat'].includes(p.statistic)) return 'discrete'; // genuine integer counts
+    if (['mean', 'prop', 'propCat', 'sd'].includes(p.statistic)) return 'continuous';
+    // sum/min/max/range/median: integer only when the underlying model is integer-valued
+    return this.isInteger(p.model) ? 'discrete' : 'continuous';
+  },
+  oneTrial(p, rnd) {
+    const draws = new Array(p.n);
+    for (let i = 0; i < p.n; i++) draws[i] = this.drawOne(p.model, p.modelParams, rnd);
+    return { draws, stat: this.reduce(draws, p) };
+  },
+  run(p) {
+    const rnd = RNG.make(p.seed);
+    const values = new Array(p.R);
+    for (let t = 0; t < p.R; t++) values[t] = this.oneTrial(p, rnd).stat;
+    return { values, dataType: this.outputType(p) };
+  },
+};
 
 /* ============================================================================
    5. STUDENT MODE
