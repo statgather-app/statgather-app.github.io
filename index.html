@@ -1058,6 +1058,17 @@ const Diag = {
     });
     return parts.join(' · ') || 'none';
   },
+  /* Verdict for the failure UX: true = at least one relay is reachable (so a
+     failure to connect means wrong code / teacher not hosting, NOT a blocked
+     network); false = every probed relay was blocked (the network is the
+     problem — switch networks or use the offline bulk fallback); null = the
+     probe hasn't produced a result yet. */
+  anyRelayReachable() {
+    if (!this.signaling) return null;
+    const names = DISCOVERY_ORDER.filter(n => this.signaling[n]);
+    if (!names.length) return null;
+    return names.some(n => { const s = this.sigStat(n); return s && s.ok > 0; });
+  },
 
   /* Overall LED: green once any network has an actual peer; amber while trying;
      red once every loaded network is unusable — either failed to load or (per
@@ -2351,12 +2362,33 @@ const Student = {
     if (!names.length) { this.fail('No discovery network could load. Check your internet connection and reload.'); return; }
 
     let settled = false;
-    // No teacher on ANY network in time means: wrong code, teacher isn't hosting
-    // yet, or every network is blocked. The diagnostics panel disambiguates.
+    // No teacher on ANY network in time means one of three things — and the
+    // signaling probe (resolves within ~8s, well before this 20s timeout) tells
+    // us WHICH, so the student gets an actionable message instead of a guess:
+    //   • some relay reachable → the network is fine, so it's a wrong/expired
+    //     code or the teacher hasn't started hosting yet.
+    //   • no relay reachable   → this network is blocking discovery outright;
+    //     switch to mobile data, or fall back to the teacher's bulk entry.
     const failTimer = setTimeout(() => {
       if (!settled) {
-        Diag.log('No teacher found on any network within 20s.');
-        this.fail('No session found for code STAT-' + code + '. Check the code with your teacher — the room may not be running yet, or the network may be blocking every connection. Ask for the bulk-entry option if this persists.');
+        const reachable = Diag.anyRelayReachable();
+        let title = 'Can\'t reach the room', msg;
+        if (reachable === false) {
+          Diag.log('No teacher found in 20s — and every discovery relay is blocked on this network.');
+          title = 'This network is blocking the connection';
+          msg = 'Every connection route is blocked here — this is the network, not the code (STAT-' + code + '). '
+              + 'If you can, switch this device to mobile data or a hotspot and tap Try again. '
+              + 'Otherwise, read your answer to your teacher — they can add it directly using the Bulk option on their screen.';
+        } else if (reachable === true) {
+          Diag.log('No teacher found in 20s — but relays are reachable, so the room isn\'t being hosted.');
+          title = 'No one is hosting that code';
+          msg = 'Your network is fine, but no teacher is hosting STAT-' + code + ' right now. '
+              + 'Double-check the code, and make sure your teacher has started the session — then tap Try again.';
+        } else {
+          Diag.log('No teacher found on any network within 20s.');
+          msg = 'No session found for code STAT-' + code + '. Check the code with your teacher — the room may not be running yet, or the network may be blocking every connection. Ask for the bulk-entry option if this persists.';
+        }
+        this.fail(msg, title);
       }
     }, 20000);
 
@@ -2404,9 +2436,9 @@ const Student = {
     }
   },
 
-  fail(msg) {
+  fail(msg, title) {
     this.setBadge('bad', 'Disconnected');
-    $('#s-err-title').textContent = 'Can\'t reach the room';
+    $('#s-err-title').textContent = title || 'Can\'t reach the room';
     $('#s-err-body').textContent = msg;
     this.showStep('error-state');
   },
