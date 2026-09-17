@@ -94,6 +94,13 @@
     try {
       const mod = await import(url);
       window.Trystero.strategies[name] = mod.joinRoom;
+      // Capture the nostr module's own signer so the diagnostics can run a real
+      // publish→receive round-trip probe (probeNostrRelay) instead of only a
+      // socket-open check — a relay that opens but doesn't forward events looks
+      // "reachable" but can't actually connect peers.
+      if (name === 'nostr' && mod.createEvent && mod.subscribe) {
+        window.Trystero.nostrTools = { createEvent: mod.createEvent, subscribe: mod.subscribe };
+      }
     } catch (e) {
       window.Trystero.failed[name] = String(e);
       console.warn('[StatGather] discovery strategy failed to load:', name, e);
@@ -891,14 +898,27 @@ const RELAY_URLS = {
     'wss://test.mosquitto.org:8081/mqtt',
     'wss://broker.hivemq.com:8884/mqtt',
   ],
-  // Nostr relays: plain wss on 443, indistinguishable from HTTPS — the best bet
-  // through a hostile firewall. Reputable, high-uptime, open, relay ephemeral
-  // events (what Trystero uses for signaling).
+  // Nostr relays: plain wss on 443, indistinguishable from HTTPS — the best (and
+  // only) no-backend bet through a hostile school filter. A wide pool prioritising
+  // Cloudflare-fronted / major-host relays: the filter blocks by DOMAIN, and
+  // Cloudflare-fronted relays present Cloudflare's SNI/IPs, which school filters
+  // whitelist broadly (CDN category) — the same reason github.io and the TURN
+  // server clear it. The round-trip probe (probeNostrRelay) reports which of
+  // these actually FORWARD events through the filter, not just open a socket, so
+  // dead/blocked/read-only relays in this list simply get flagged, not relied on.
   nostr: [
-    'wss://relay.damus.io',
+    'wss://relay.primal.net',       // Cloudflare-fronted
+    'wss://relay.mostr.pub',        // Cloudflare-fronted
     'wss://nos.lol',
-    'wss://relay.primal.net',
+    'wss://relay.damus.io',
     'wss://relay.snort.social',
+    'wss://offchain.pub',
+    'wss://nostr.mom',
+    'wss://relay.nostr.bg',
+    'wss://relay.nostr.wirednet.jp',
+    'wss://nostr.oxtr.dev',
+    'wss://nostr.bitcoiner.social',
+    'wss://relay.nostrplebs.com',
   ],
   // WebTorrent trackers: wss on 443.
   torrent: [
@@ -973,14 +993,62 @@ function probeRelay(url, subprotocol, timeoutMs = 8000) {
     ws.onclose = e => finish(false, 'closed ' + (e && e.code != null ? e.code : ''));
   });
 }
+/* ── Round-trip nostr probe ───────────────────────────────────────────────────
+   A socket that merely OPENS overstates usability: the real classroom test had a
+   nostr relay "reachable" that never connected the peers, because opening the
+   WebSocket says nothing about whether the relay FORWARDS our events (many accept
+   the connection but rate-limit, require NIP-42 AUTH, or are read-only). So for
+   nostr we do the real thing: subscribe to a unique ephemeral topic, publish a
+   signed event to it, and wait to receive it back. Round-trip = the relay truly
+   relays through the filter (peers can meet); open-but-no-round-trip = a dead
+   end; never-opens = blocked. Uses the nostr module's own signer captured at load.
+   Returns { url, ok:<socket opened>, relay:<round-trip ok>, status, detail }. */
+function probeNostrRelay(url, timeoutMs = 8000) {
+  const tools = window.Trystero && window.Trystero.nostrTools;
+  // Signer unavailable (nostr module failed to load) → fall back to socket-open.
+  if (!tools) return probeRelay(url).then(r => Object.assign(r, { relay: false, status: r.ok ? 'open' : 'blocked' }));
+  const topic = 'sgprobe' + Math.random().toString(36).slice(2, 10);
+  const nonce = Math.random().toString(36).slice(2);
+  const subId = Math.random().toString(36).slice(2, 12);
+  return Promise.resolve(tools.createEvent(topic, nonce)).catch(() => null).then(evt =>
+    new Promise(resolve => {
+      let ws, opened = false, done = false, timer;
+      const finish = (status, detail) => {
+        if (done) return; done = true; clearTimeout(timer);
+        try { ws && ws.close(); } catch (e) {}
+        resolve({ url, ok: opened, relay: status === 'relay', status, detail });
+      };
+      try { ws = new WebSocket(url); }
+      catch (e) { return resolve({ url, ok: false, relay: false, status: 'blocked', detail: String(e) }); }
+      timer = setTimeout(() => finish(opened ? 'open' : 'blocked', opened ? 'no round-trip in time' : 'timeout'), timeoutMs);
+      ws.onopen = () => {
+        opened = true;
+        // REQ first (registers the subscription), then the EVENT it should echo back.
+        try { ws.send(tools.subscribe(subId, topic)); if (evt) ws.send(evt); } catch (e) {}
+      };
+      ws.onerror = () => finish(opened ? 'open' : 'blocked', 'error');
+      ws.onclose = e => finish(opened ? 'open' : 'blocked', 'closed ' + (e && e.code != null ? e.code : ''));
+      ws.onmessage = m => {
+        let d; try { d = JSON.parse(m.data); } catch (e) { return; }
+        if (Array.isArray(d) && d[0] === 'EVENT' && d[1] === subId && d[2] && d[2].content === nonce) finish('relay', 'round-trip ok');
+      };
+    })
+  );
+}
 /* Probe every relay of every loaded strategy in parallel; resolves to
-   { mqtt:[{url,ok,detail}…], nostr:[…], torrent:[…] }. */
+   { mqtt:[{url,ok,detail}…], nostr:[{url,ok,relay,status,detail}…], torrent:[…] }.
+   nostr gets the round-trip probe; mqtt/torrent get the socket-open probe. */
 function runSignalingProbe() {
   const names = availableStrategies();
   return Promise.all(names.map(async name => {
     const urls = RELAY_URLS[name] || [];
-    const sub = name === 'mqtt' ? 'mqtt' : null; // MQTT brokers want the subprotocol on the WS upgrade
-    const results = await Promise.all(urls.map(u => probeRelay(u, sub)));
+    let results;
+    if (name === 'nostr') {
+      results = await Promise.all(urls.map(u => probeNostrRelay(u)));
+    } else {
+      const sub = name === 'mqtt' ? 'mqtt' : null; // MQTT brokers want the subprotocol on the WS upgrade
+      results = await Promise.all(urls.map(u => probeRelay(u, sub)));
+    }
     return [name, results];
   })).then(pairs => Object.fromEntries(pairs));
 }
@@ -1049,8 +1117,20 @@ const Diag = {
     if (!arr) return null;
     return { ok: arr.filter(x => x.ok).length, total: arr.length };
   },
-  /* One-line reachability summary across all probed networks, e.g.
-     "mqtt 0/3 · nostr 3/4 · torrent 2/3". */
+  /* Count of relays that passed the round-trip test (actually forward events).
+     Only meaningful for round-trip-probed networks (nostr); null otherwise. */
+  sigRelaying(name) {
+    const arr = this.signaling && this.signaling[name];
+    if (!arr || !arr.some(x => 'relay' in x)) return null;
+    return arr.filter(x => x.relay).length;
+  },
+  /* nostr round-trip one-liner, e.g. "1/12 relaying", or null if not probed. */
+  nostrRelaySummary() {
+    const r = this.sigRelaying('nostr'), s = this.sigStat('nostr');
+    return (r == null || !s) ? null : r + '/' + s.total + ' relaying';
+  },
+  /* One-line socket-reachability summary across networks, e.g.
+     "mqtt 0/3 · nostr 3/12 · torrent 2/3" (sockets that OPENED). */
   signalingSummary() {
     if (!this.signaling) return 'running…';
     const parts = DISCOVERY_ORDER.filter(n => this.signaling[n]).map(n => {
@@ -1064,16 +1144,19 @@ const Diag = {
      "network is fine": that classroom had nostr 1/4 (+ mqtt 0/3, torrent 0/3) —
      only 1 of 10 routes open — and the peers still couldn't meet, yet the old
      logic told the student "no one is hosting" while the teacher WAS hosting.
-     So callers judge by the fraction, not by "any". (Also note a passing probe
-     only means the socket OPENED, not that the relay actually forwards our
-     events — so a low fraction is a strong "network problem" signal, but a high
-     one is only a weak "network looks ok" signal.) */
+     So callers judge by the COUNT of usable relays (0 = blocked, 1 = fragile
+     single point of failure, 2+ = the network can carry signaling), not by "any".
+     "Usable" means: for round-trip-probed networks (nostr) the relay actually
+     forwarded our event; for the others (mqtt/torrent) the socket merely opened.
+     So a relay that "opens but doesn't forward events" correctly counts as
+     unusable — the exact trap the first school test fell into. (`frac` is still
+     returned but callers prefer `reachable`.) */
   relayReachRatio() {
     if (!this.signaling) return null;
     const names = DISCOVERY_ORDER.filter(n => this.signaling[n]);
     if (!names.length) return null;
     let reachable = 0, total = 0;
-    names.forEach(n => { const s = this.sigStat(n); if (s) { reachable += s.ok; total += s.total; } });
+    names.forEach(n => this.signaling[n].forEach(x => { total++; if ('relay' in x ? x.relay : x.ok) reachable++; }));
     return total ? { reachable, total, frac: reachable / total } : null;
   },
 
@@ -1101,9 +1184,16 @@ const Diag = {
       // from "every relay blocked" — the distinction the old panel couldn't show.
       let searching = 'searching…';
       if (sig) {
-        searching = sig.ok === 0
-          ? '<span style="color:#f2999c;font-weight:700;">blocked 0/' + sig.total + '</span>'
-          : 'searching… <span style="color:#9fb6d6;">(relays ' + sig.ok + '/' + sig.total + ')</span>';
+        const relaying = this.sigRelaying(n); // nostr: how many actually forward events
+        if (sig.ok === 0) {
+          searching = '<span style="color:#f2999c;font-weight:700;">blocked 0/' + sig.total + '</span>';
+        } else if (relaying != null) {
+          // nostr: sockets that opened AND how many round-tripped (the real signal)
+          searching = (relaying > 0 ? 'searching… ' : '<span style="color:#f2999c;font-weight:700;">no relay </span>')
+            + '<span style="color:#9fb6d6;">(open ' + sig.ok + '/' + sig.total + ', relaying ' + relaying + ')</span>';
+        } else {
+          searching = 'searching… <span style="color:#9fb6d6;">(relays ' + sig.ok + '/' + sig.total + ')</span>';
+        }
       }
       const state = s.error ? '<span style="color:#f2999c;">load failed</span>'
         : s.peer ? '<span style="color:#6ee0b8;font-weight:700;">CONNECTED ✓</span>'
@@ -1123,16 +1213,18 @@ const Diag = {
     const rr = this.relayReachRatio();
     if (rr) {
       sigInterp = rr.reachable === 0
-        ? '<div style="color:#f2999c;margin-top:2px;">No discovery relay reachable — this network is blocking discovery (TURN alone can\'t connect peers).</div>'
-        : rr.frac < 0.5
-          ? '<div style="color:#e9c07a;margin-top:2px;">Only ' + rr.reachable + '/' + rr.total + ' relays reachable — heavily restricted; a link may not form even so.</div>'
-          : '<div style="color:#6ee0b8;margin-top:2px;">Discovery relays broadly reachable — peers should be able to meet.</div>';
+        ? '<div style="color:#f2999c;margin-top:2px;">No usable discovery relay — this network blocks discovery, or the relays that open don\'t forward events (TURN alone can\'t connect peers).</div>'
+        : rr.reachable < 2
+          ? '<div style="color:#e9c07a;margin-top:2px;">Only ' + rr.reachable + ' usable relay — fragile; both devices must independently reach the same one, so a link may not form.</div>'
+          : '<div style="color:#6ee0b8;margin-top:2px;">' + rr.reachable + ' usable relays — peers should be able to meet.</div>';
     }
+    const nrs = this.nostrRelaySummary();
     this.panel.querySelector('#diag-summary').innerHTML =
       '<div style="color:#9fb6d6;">role: <b style="color:#dbe6f2;">' + (this.role || '—') + '</b></div>'
       + '<div style="margin-top:4px;color:#9fb6d6;">TURN/STUN self-test: <b style="color:#dbe6f2;">' + this.probeSummary(this.probe) + '</b></div>'
       + interp
-      + '<div style="margin-top:4px;color:#9fb6d6;">Discovery relays: <b style="color:#dbe6f2;">' + this.signalingSummary() + '</b></div>'
+      + '<div style="margin-top:4px;color:#9fb6d6;">Discovery relays (open): <b style="color:#dbe6f2;">' + this.signalingSummary() + '</b></div>'
+      + (nrs ? '<div style="margin-top:2px;color:#9fb6d6;">Nostr round-trip: <b style="color:#dbe6f2;">' + nrs + '</b></div>' : '')
       + sigInterp
       + (netRows ? '<div style="margin-top:6px;border-top:1px solid #14315e;padding-top:5px;">' + netRows + '</div>' : '');
     const logEl = this.panel.querySelector('#diag-log');
@@ -1147,22 +1239,35 @@ const Diag = {
     lines.push('when: ' + new Date().toISOString());
     lines.push('ua: ' + navigator.userAgent);
     lines.push('TURN/STUN self-test: ' + this.probeSummary(this.probe));
-    lines.push('discovery relays reachable: ' + this.signalingSummary());
+    lines.push('discovery relays (socket open): ' + this.signalingSummary());
+    const nrs = this.nostrRelaySummary();
+    if (nrs) lines.push('nostr round-trip (actually relaying): ' + nrs);
     lines.push('strategies loaded: ' + (availableStrategies().join(', ') || 'none'));
     const failed = (window.Trystero && window.Trystero.failed) || {};
     if (Object.keys(failed).length) lines.push('strategies failed to load: ' + Object.keys(failed).join(', '));
     DISCOVERY_ORDER.filter(n => this.strategies[n]).forEach(n => {
       const s = this.strategies[n];
       const sig = this.sigStat(n);
-      const sigTxt = sig ? ' [relays ' + sig.ok + '/' + sig.total + ']' : '';
+      const relaying = this.sigRelaying(n);
+      const sigTxt = sig ? ' [open ' + sig.ok + '/' + sig.total + (relaying != null ? ', relaying ' + relaying : '') + ']' : '';
       lines.push('  ' + n + ': ' + (s.error ? 'load failed (' + s.error + ')' : s.peer ? 'CONNECTED' : s.joined ? 'searching' : 'idle') + sigTxt);
     });
-    // Per-URL reachability so a failed test names exactly which endpoints the
-    // network blocked — the actionable detail for picking relays.
+    // Per-URL reachability so a failed test names exactly which endpoints worked.
+    // For nostr, ✓ = round-tripped (usable), ~ = opened but didn't relay, ✗ = blocked.
     if (this.signaling) {
       lines.push('--- relay reachability ---');
       DISCOVERY_ORDER.filter(n => this.signaling[n]).forEach(n => {
-        this.signaling[n].forEach(x => lines.push('  ' + (x.ok ? '✓' : '✗') + ' ' + n + ' ' + x.url + (x.ok ? '' : ' (' + x.detail + ')')));
+        this.signaling[n].forEach(x => {
+          let mark, extra = '';
+          if ('relay' in x) {           // nostr round-trip result
+            mark = x.relay ? '✓' : (x.ok ? '~' : '✗');
+            extra = x.relay ? ' relaying' : (x.ok ? ' opens but not relaying' : ' (' + x.detail + ')');
+          } else {                       // mqtt/torrent socket-open result
+            mark = x.ok ? '✓' : '✗';
+            extra = x.ok ? '' : ' (' + x.detail + ')';
+          }
+          lines.push('  ' + mark + ' ' + n + ' ' + x.url + extra);
+        });
       });
     }
     lines.push('--- log ---');
@@ -1269,7 +1374,7 @@ const Teacher = {
     runIceProbe(window.RTC_CONFIG).then(r => { Diag.setProbe(r); Diag.log('TURN/STUN self-test: ' + Diag.probeSummary(r)); });
     // …and the independent discovery-reachability probe: which relays this
     // network actually lets through (the layer a school firewall blocks).
-    runSignalingProbe().then(s => { Diag.setSignaling(s); Diag.log('Discovery relays reachable: ' + Diag.signalingSummary()); });
+    runSignalingProbe().then(s => { Diag.setSignaling(s); Diag.log('Discovery relays (open): ' + Diag.signalingSummary()); const nr = Diag.nostrRelaySummary(); if (nr) Diag.log('Nostr round-trip: ' + nr); });
 
     const names = availableStrategies();
     const failed = Object.keys((window.Trystero && window.Trystero.failed) || {});
@@ -2358,7 +2463,7 @@ const Student = {
     await whenTransportReady();
     Diag.log('Transport ready. Joining STAT-' + code + ' on all networks…');
     runIceProbe(window.RTC_CONFIG).then(r => { Diag.setProbe(r); Diag.log('TURN/STUN self-test: ' + Diag.probeSummary(r)); });
-    runSignalingProbe().then(s => { Diag.setSignaling(s); Diag.log('Discovery relays reachable: ' + Diag.signalingSummary()); });
+    runSignalingProbe().then(s => { Diag.setSignaling(s); Diag.log('Discovery relays (open): ' + Diag.signalingSummary()); const nr = Diag.nostrRelaySummary(); if (nr) Diag.log('Nostr round-trip: ' + nr); });
 
     // Leave any previous rooms, then join the code on every available network.
     this.leaveAll();
@@ -2389,18 +2494,19 @@ const Student = {
           msg = 'Every connection route is blocked here — this is the network, not the code (STAT-' + code + '). '
               + 'If you can, switch this device to mobile data or a hotspot and tap Try again. '
               + 'Otherwise, read your answer to your teacher — they can add it directly using the Bulk option on their screen.';
-        } else if (r && r.frac < 0.5) {
-          // Only a fraction of routes open (e.g. the school test: 1/10). Can't
-          // confidently blame the code/teacher — a restricted network fails this
-          // way too, and an open socket doesn't prove the relay actually works.
-          Diag.log('No teacher found in 20s — network heavily restricted (' + r.reachable + '/' + r.total + ' relays open), link not forming.');
+        } else if (r && r.reachable < 2) {
+          // Just one usable relay: fragile. Both devices must independently reach
+          // the SAME relay, and a restricted network fails this way too — so we
+          // can't confidently blame the code/teacher.
+          Diag.log('No teacher found in 20s — only ' + r.reachable + ' usable relay, link not forming.');
           title = 'This network is heavily restricted';
-          msg = 'Most connection routes are blocked here (only ' + r.reachable + ' of ' + r.total + ' got through), and the link isn\'t forming. '
+          msg = 'Almost every connection route is blocked here (only ' + r.reachable + ' of ' + r.total + ' works), and the link isn\'t forming. '
               + 'Double-check the code (STAT-' + code + '); if it\'s right, the network is the likely cause — switch this device to mobile data or a hotspot, '
               + 'or give your teacher your value to enter with the Bulk option on their screen.';
         } else if (r) {
-          // Healthy reachability → most likely genuinely no host / wrong code.
-          Diag.log('No teacher found in 20s — relays broadly reachable (' + r.reachable + '/' + r.total + '), so the room likely isn\'t being hosted.');
+          // Two or more relays actually forward events → the network can carry
+          // signaling, so a failure is most likely no host / wrong code.
+          Diag.log('No teacher found in 20s — ' + r.reachable + ' usable relays, so the room likely isn\'t being hosted.');
           title = 'No one is hosting that code';
           msg = 'Your network looks fine, but no teacher seems to be hosting STAT-' + code + ' right now. '
               + 'Double-check the code, and make sure your teacher has started the session — then tap Try again.';
