@@ -1058,16 +1058,23 @@ const Diag = {
     });
     return parts.join(' · ') || 'none';
   },
-  /* Verdict for the failure UX: true = at least one relay is reachable (so a
-     failure to connect means wrong code / teacher not hosting, NOT a blocked
-     network); false = every probed relay was blocked (the network is the
-     problem — switch networks or use the offline bulk fallback); null = the
-     probe hasn't produced a result yet. */
-  anyRelayReachable() {
+  /* Aggregate relay reachability across every probed network, for the failure
+     UX. Returns {reachable,total,frac} or null if the probe hasn't produced a
+     result yet. A single school test taught us NOT to treat "≥1 relay open" as
+     "network is fine": that classroom had nostr 1/4 (+ mqtt 0/3, torrent 0/3) —
+     only 1 of 10 routes open — and the peers still couldn't meet, yet the old
+     logic told the student "no one is hosting" while the teacher WAS hosting.
+     So callers judge by the fraction, not by "any". (Also note a passing probe
+     only means the socket OPENED, not that the relay actually forwards our
+     events — so a low fraction is a strong "network problem" signal, but a high
+     one is only a weak "network looks ok" signal.) */
+  relayReachRatio() {
     if (!this.signaling) return null;
     const names = DISCOVERY_ORDER.filter(n => this.signaling[n]);
     if (!names.length) return null;
-    return names.some(n => { const s = this.sigStat(n); return s && s.ok > 0; });
+    let reachable = 0, total = 0;
+    names.forEach(n => { const s = this.sigStat(n); if (s) { reachable += s.ok; total += s.total; } });
+    return total ? { reachable, total, frac: reachable / total } : null;
   },
 
   /* Overall LED: green once any network has an actual peer; amber while trying;
@@ -1113,11 +1120,13 @@ const Diag = {
     // Signaling verdict: no relay reachable anywhere = discovery is firewalled,
     // which is the failure the TURN test can't see.
     let sigInterp = '';
-    if (this.signaling) {
-      const anyOk = order.some(n => { const s = this.sigStat(n); return s && s.ok > 0; });
-      sigInterp = anyOk
-        ? '<div style="color:#6ee0b8;margin-top:2px;">Discovery relay reachable — peers can meet.</div>'
-        : '<div style="color:#f2999c;margin-top:2px;">No discovery relay reachable — this network is blocking discovery (TURN alone can\'t connect peers).</div>';
+    const rr = this.relayReachRatio();
+    if (rr) {
+      sigInterp = rr.reachable === 0
+        ? '<div style="color:#f2999c;margin-top:2px;">No discovery relay reachable — this network is blocking discovery (TURN alone can\'t connect peers).</div>'
+        : rr.frac < 0.5
+          ? '<div style="color:#e9c07a;margin-top:2px;">Only ' + rr.reachable + '/' + rr.total + ' relays reachable — heavily restricted; a link may not form even so.</div>'
+          : '<div style="color:#6ee0b8;margin-top:2px;">Discovery relays broadly reachable — peers should be able to meet.</div>';
     }
     this.panel.querySelector('#diag-summary').innerHTML =
       '<div style="color:#9fb6d6;">role: <b style="color:#dbe6f2;">' + (this.role || '—') + '</b></div>'
@@ -2371,18 +2380,29 @@ const Student = {
     //     switch to mobile data, or fall back to the teacher's bulk entry.
     const failTimer = setTimeout(() => {
       if (!settled) {
-        const reachable = Diag.anyRelayReachable();
+        const r = Diag.relayReachRatio();      // {reachable,total,frac} | null
         let title = 'Can\'t reach the room', msg;
-        if (reachable === false) {
-          Diag.log('No teacher found in 20s — and every discovery relay is blocked on this network.');
+        if (r && r.reachable === 0) {
+          // Every route blocked → unambiguously the network.
+          Diag.log('No teacher found in 20s — every discovery relay is blocked on this network.');
           title = 'This network is blocking the connection';
           msg = 'Every connection route is blocked here — this is the network, not the code (STAT-' + code + '). '
               + 'If you can, switch this device to mobile data or a hotspot and tap Try again. '
               + 'Otherwise, read your answer to your teacher — they can add it directly using the Bulk option on their screen.';
-        } else if (reachable === true) {
-          Diag.log('No teacher found in 20s — but relays are reachable, so the room isn\'t being hosted.');
+        } else if (r && r.frac < 0.5) {
+          // Only a fraction of routes open (e.g. the school test: 1/10). Can't
+          // confidently blame the code/teacher — a restricted network fails this
+          // way too, and an open socket doesn't prove the relay actually works.
+          Diag.log('No teacher found in 20s — network heavily restricted (' + r.reachable + '/' + r.total + ' relays open), link not forming.');
+          title = 'This network is heavily restricted';
+          msg = 'Most connection routes are blocked here (only ' + r.reachable + ' of ' + r.total + ' got through), and the link isn\'t forming. '
+              + 'Double-check the code (STAT-' + code + '); if it\'s right, the network is the likely cause — switch this device to mobile data or a hotspot, '
+              + 'or give your teacher your value to enter with the Bulk option on their screen.';
+        } else if (r) {
+          // Healthy reachability → most likely genuinely no host / wrong code.
+          Diag.log('No teacher found in 20s — relays broadly reachable (' + r.reachable + '/' + r.total + '), so the room likely isn\'t being hosted.');
           title = 'No one is hosting that code';
-          msg = 'Your network is fine, but no teacher is hosting STAT-' + code + ' right now. '
+          msg = 'Your network looks fine, but no teacher seems to be hosting STAT-' + code + ' right now. '
               + 'Double-check the code, and make sure your teacher has started the session — then tap Try again.';
         } else {
           Diag.log('No teacher found on any network within 20s.');
