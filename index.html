@@ -31,22 +31,14 @@
 <script src="https://cdn.tailwindcss.com"></script>
 <script src="https://cdn.plot.ly/plotly-2.29.0.min.js"></script>
 
-<!-- ── Realtime transport: Trystero (WebRTC, multi-network discovery) ───────────
-     Replaces PeerJS. Peers discover each other through public infrastructure
-     instead of one signaling server (0.peerjs.com), which locked-down school /
-     enterprise wifi routinely blocks by domain.
-
-     RESILIENCE: rather than bet on a single discovery network (a school firewall
-     blocked first Nostr, then apparently MQTT too), we load THREE strategies —
-     MQTT brokers, Nostr relays, and BitTorrent trackers — and the teacher &
-     students join the room on all of them at once. Whichever network the firewall
-     doesn't block is the one the connection forms over; the rest fall away. This
-     both maximizes the chance of connecting and, with the diagnostics panel,
-     tells us exactly which networks got through.
-
-     Student responses still travel directly peer-to-peer, end-to-end encrypted —
-     the relays/brokers/trackers carry only the tiny connection handshake, and
-     nothing is ever stored. -- -->
+<!-- ── Realtime transport: PeerJS (WebRTC data channels) ──────────────────
+     Student browsers connect directly to the teacher's browser over WebRTC. A
+     single small signaling server (PeerJS's public cloud, or a self-hosted
+     PeerServer) is used ONLY to introduce the two browsers to each other — it
+     carries the tiny connection handshake, then all survey data flows directly
+     peer-to-peer, end-to-end encrypted, and is never stored anywhere. On
+     restrictive networks the WebRTC media path still forms through the TURN
+     relay configured below. -- -->
 <script>
   /* ICE servers for the peer-to-peer data channel.
      • STUN lets each peer discover its own public address (free, open, relays no
@@ -72,43 +64,7 @@
     ],
   };
 </script>
-<script type="module">
-  /* Load every discovery strategy as its own ES module. Each is imported
-     independently (Promise.allSettled) so one CDN/module failing to load can't
-     stop the others — we use whichever ones succeed. The app awaits the
-     'trystero:ready' event before joining rooms (modules evaluate asynchronously
-     vs. the classic app script below).
-     To drop a network from the pool, delete its line here. To add one back
-     (e.g. 'supabase', 'firebase'), add "name: url". */
-  /* NOTE: as of Trystero 0.25.x each strategy is its own scoped package
-     (@trystero-p2p/<name>); the old 'trystero/<name>' subpaths are DEPRECATED
-     and throw on import — that alone would leave the whole app hanging on
-     "Connecting…". Always use the @trystero-p2p/* packages below. */
-  const STRATEGY_URLS = {
-    mqtt:    'https://esm.run/@trystero-p2p/mqtt@0.25.4',
-    nostr:   'https://esm.run/@trystero-p2p/nostr@0.25.4',
-    torrent: 'https://esm.run/@trystero-p2p/torrent@0.25.4',
-  };
-  window.Trystero = { strategies: {}, failed: {}, ready: false };
-  await Promise.allSettled(Object.entries(STRATEGY_URLS).map(async ([name, url]) => {
-    try {
-      const mod = await import(url);
-      window.Trystero.strategies[name] = mod.joinRoom;
-      // Capture the nostr module's own signer so the diagnostics can run a real
-      // publish→receive round-trip probe (probeNostrRelay) instead of only a
-      // socket-open check — a relay that opens but doesn't forward events looks
-      // "reachable" but can't actually connect peers.
-      if (name === 'nostr' && mod.createEvent && mod.subscribe) {
-        window.Trystero.nostrTools = { createEvent: mod.createEvent, subscribe: mod.subscribe };
-      }
-    } catch (e) {
-      window.Trystero.failed[name] = String(e);
-      console.warn('[StatGather] discovery strategy failed to load:', name, e);
-    }
-  }));
-  window.Trystero.ready = true; // set only AFTER every import settled
-  window.dispatchEvent(new Event('trystero:ready'));
-</script>
+<script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet" />
@@ -737,8 +693,8 @@
      1. Icons + tiny DOM helpers
      2. Statistics engine (pure functions; documented conventions)
      3. Router / screen switching
-     4. Teacher mode: Trystero host, config broadcast, table, stats, charts, export
-     5. Student mode: Trystero client, handshake, validation, submit, states
+     4. Teacher mode: PeerJS host, config broadcast, table, stats, charts, export
+     5. Student mode: PeerJS client, handshake, validation, submit, states
    ============================================================================ */
 
 /* ── 1. Icons (single-stroke SVG set — no emoji/unicode as icons) ───────────── */
@@ -854,445 +810,23 @@ function makeCode() {
   let c = ''; for (let i = 0; i < 4; i++) c += CODE_ALPHABET[Math.floor(Math.random() * CODE_ALPHABET.length)];
   return c;
 }
-/* Trystero namespace — isolates our rooms from other apps sharing the public
-   discovery networks. The 4-char code is the room id within this namespace. */
-const TRYSTERO_APP_ID = 'statgather-classroom-v1';
+/* One signaling server introduces the browsers; the 4-char code becomes the
+   host's peer id (PEER_PREFIX + code), so a student who knows only the code can
+   reach the teacher. */
+const PEER_PREFIX = 'statgather-';
 const joinLinkFor = code => location.origin + location.pathname + '?room=' + code;
-/* Trystero is imported as ES modules, which evaluate after this classic script
-   parses; resolve once the loader has published window.Trystero. */
-function whenTransportReady() {
-  return (window.Trystero && window.Trystero.ready)
-    ? Promise.resolve()
-    : new Promise(res => window.addEventListener('trystero:ready', res, { once: true }));
-}
-/* The discovery networks that actually finished loading, in preference order. */
-const DISCOVERY_ORDER = ['mqtt', 'nostr', 'torrent'];
-function availableStrategies() {
-  const s = (window.Trystero && window.Trystero.strategies) || {};
-  return DISCOVERY_ORDER.filter(n => typeof s[n] === 'function');
-}
-
-/* ── Pinned discovery relays (relayConfig.urls) ──────────────────────────────
-   Trystero's getRelays() returns a passed relayConfig.urls list VERBATIM (its
-   redundancy default is ignored), so pinning a list makes the teacher and every
-   student connect to the SAME full set — guaranteed overlap, and the exact URLs
-   we can probe below.
-
-   Why override the library defaults: a real classroom test proved the defaults
-   don't survive a locked-down school network. Trystero's MQTT default brokers
-   all live on firewall-hostile ports (test.mosquitto.org:8081, emqx:8084,
-   hivemq:8884) — the school dropped every one ("WebSocket … :8081 failed:
-   connack timeout"), so the teacher never announced anywhere the students could
-   see. TURN cleared the same firewall only because it rides TLS/443 and looks
-   like HTTPS. We therefore lean discovery on the strategies that share that
-   property: Nostr relays and WebTorrent trackers speak wss on 443. MQTT stays in
-   the pool for open networks / mobile data (the common case) but can't be
-   counted on through a hostile firewall — that's inherent to public MQTT-over-WS.
-   To change the pool for a network, edit the lists here (these are the URLs the
-   signaling probe reports on, so keep them in sync). */
-const RELAY_URLS = {
-  // Public MQTT-over-WSS brokers. Non-443 ports — reachable on open networks,
-  // typically blocked on locked-down school/enterprise wifi.
-  mqtt: [
-    'wss://broker.emqx.io:8084/mqtt',
-    'wss://test.mosquitto.org:8081/mqtt',
-    'wss://broker.hivemq.com:8884/mqtt',
-  ],
-  // Nostr relays: plain wss on 443, indistinguishable from HTTPS — the best (and
-  // only) no-backend bet through a hostile school filter. A wide pool prioritising
-  // Cloudflare-fronted / major-host relays: the filter blocks by DOMAIN, and
-  // Cloudflare-fronted relays present Cloudflare's SNI/IPs, which school filters
-  // whitelist broadly (CDN category) — the same reason github.io and the TURN
-  // server clear it. The round-trip probe (probeNostrRelay) reports which of
-  // these actually FORWARD events through the filter, not just open a socket, so
-  // dead/blocked/read-only relays in this list simply get flagged, not relied on.
-  nostr: [
-    'wss://relay.primal.net',       // Cloudflare-fronted
-    'wss://relay.mostr.pub',        // Cloudflare-fronted
-    'wss://nos.lol',
-    'wss://relay.damus.io',
-    'wss://relay.snort.social',
-    'wss://offchain.pub',
-    'wss://nostr.mom',
-    'wss://relay.nostr.bg',
-    'wss://relay.nostr.wirednet.jp',
-    'wss://nostr.oxtr.dev',
-    'wss://nostr.bitcoiner.social',
-    'wss://relay.nostrplebs.com',
-  ],
-  // WebTorrent trackers: wss on 443.
-  torrent: [
-    'wss://tracker.openwebtorrent.com',
-    'wss://tracker.webtorrent.dev',
-    'wss://tracker.btorrent.xyz',
-  ],
-};
-/* Config passed to every joinRoom() so the teacher and students share one relay
-   set per network. (rtcConfig is added at each call site.) */
-function relayConfigFor(name) {
-  return RELAY_URLS[name] ? { urls: RELAY_URLS[name].slice() } : undefined;
-}
-
-/* ── Independent ICE / TURN self-test ────────────────────────────────────────
-   Stands up a throwaway RTCPeerConnection with the SAME ICE config the app uses
-   and watches which candidate types it can gather — completely independent of
-   the discovery networks. This isolates the two ways a connection can fail:
-     • relay candidate present  → metered.ca's TURN is reachable; the data channel
-       can form even on a locked-down network. If students still can't connect,
-       the problem is DISCOVERY (relays/brokers/trackers blocked).
-     • relay candidate ABSENT   → TURN itself is blocked/unreachable, so on a
-       restrictive network the data channel can never form no matter what.
-   (srflx = STUN reflexive = your public address via UDP; host = local address.) */
-function runIceProbe(rtcConfig) {
-  return new Promise(resolve => {
-    const r = { host: false, srflx: false, relay: false, relayTcp: false, error: null };
-    let pc, done = false;
-    const finish = () => { if (done) return; done = true; try { pc.close(); } catch (e) {} resolve(r); };
-    try { pc = new RTCPeerConnection(rtcConfig); } catch (e) { r.error = String(e); return resolve(r); }
-    try { pc.createDataChannel('probe'); } catch (e) {}
-    pc.onicecandidate = e => {
-      if (!e.candidate) return finish(); // null candidate = gathering complete
-      const c = e.candidate.candidate || '';
-      if (/ typ host/.test(c)) r.host = true;
-      else if (/ typ srflx/.test(c)) r.srflx = true;
-      else if (/ typ relay/.test(c)) { r.relay = true; if (/ tcp | tcptype /i.test(c)) r.relayTcp = true; }
-    };
-    pc.createOffer().then(o => pc.setLocalDescription(o)).catch(e => { r.error = String(e); finish(); });
-    setTimeout(finish, 8000); // cap the wait even if gathering never signals completion
-  });
-}
-
-/* ── Independent signaling-reachability probe ────────────────────────────────
-   The TURN self-test above says nothing about whether the DISCOVERY networks
-   are reachable — those are the ones a school firewall actually blocks, and the
-   old diagnostics couldn't see it: joinRoom() returns synchronously and never
-   throws when its broker/relay WebSocket is silently dropped, so a network sat
-   at "searching…" whether it was connected-with-no-peer or fully blocked.
-
-   This opens a throwaway WebSocket to each pinned relay URL and reports whether
-   the handshake completes. A successful open = the firewall lets that endpoint
-   through (peers can meet there); a timeout/close/error = blocked or down. That
-   turns "no teacher found" from a guess into per-URL evidence. We only care that
-   the socket OPENS — MQTT brokers then expect an MQTT CONNECT, but the open
-   already proves the transport isn't firewalled, which is the whole question. */
-function probeRelay(url, subprotocol, timeoutMs = 8000) {
-  return new Promise(resolve => {
-    // Browsers throw on WebSocket URLs with embedded credentials — strip any.
-    const clean = url.replace(/^(wss?:\/\/)[^@/]*@/, '$1');
-    let ws, done = false, timer;
-    const finish = (ok, detail) => {
-      if (done) return; done = true; clearTimeout(timer);
-      try { ws && ws.close(); } catch (e) {}
-      resolve({ url, ok, detail });
-    };
-    try { ws = subprotocol ? new WebSocket(clean, subprotocol) : new WebSocket(clean); }
-    catch (e) { return resolve({ url, ok: false, detail: String(e) }); }
-    timer = setTimeout(() => finish(false, 'timeout'), timeoutMs);
-    ws.onopen  = () => finish(true, 'open');
-    ws.onerror = () => finish(false, 'error');       // fires for blocked/refused
-    ws.onclose = e => finish(false, 'closed ' + (e && e.code != null ? e.code : ''));
-  });
-}
-/* ── Round-trip nostr probe ───────────────────────────────────────────────────
-   A socket that merely OPENS overstates usability: the real classroom test had a
-   nostr relay "reachable" that never connected the peers, because opening the
-   WebSocket says nothing about whether the relay FORWARDS our events (many accept
-   the connection but rate-limit, require NIP-42 AUTH, or are read-only). So for
-   nostr we do the real thing: subscribe to a unique ephemeral topic, publish a
-   signed event to it, and wait to receive it back. Round-trip = the relay truly
-   relays through the filter (peers can meet); open-but-no-round-trip = a dead
-   end; never-opens = blocked. Uses the nostr module's own signer captured at load.
-   Returns { url, ok:<socket opened>, relay:<round-trip ok>, status, detail }. */
-function probeNostrRelay(url, timeoutMs = 8000) {
-  const tools = window.Trystero && window.Trystero.nostrTools;
-  // Signer unavailable (nostr module failed to load) → fall back to socket-open.
-  if (!tools) return probeRelay(url).then(r => Object.assign(r, { relay: false, status: r.ok ? 'open' : 'blocked' }));
-  const topic = 'sgprobe' + Math.random().toString(36).slice(2, 10);
-  const nonce = Math.random().toString(36).slice(2);
-  const subId = Math.random().toString(36).slice(2, 12);
-  return Promise.resolve(tools.createEvent(topic, nonce)).catch(() => null).then(evt =>
-    new Promise(resolve => {
-      let ws, opened = false, done = false, timer;
-      const finish = (status, detail) => {
-        if (done) return; done = true; clearTimeout(timer);
-        try { ws && ws.close(); } catch (e) {}
-        resolve({ url, ok: opened, relay: status === 'relay', status, detail });
-      };
-      try { ws = new WebSocket(url); }
-      catch (e) { return resolve({ url, ok: false, relay: false, status: 'blocked', detail: String(e) }); }
-      timer = setTimeout(() => finish(opened ? 'open' : 'blocked', opened ? 'no round-trip in time' : 'timeout'), timeoutMs);
-      ws.onopen = () => {
-        opened = true;
-        // REQ first (registers the subscription), then the EVENT it should echo back.
-        try { ws.send(tools.subscribe(subId, topic)); if (evt) ws.send(evt); } catch (e) {}
-      };
-      ws.onerror = () => finish(opened ? 'open' : 'blocked', 'error');
-      ws.onclose = e => finish(opened ? 'open' : 'blocked', 'closed ' + (e && e.code != null ? e.code : ''));
-      ws.onmessage = m => {
-        let d; try { d = JSON.parse(m.data); } catch (e) { return; }
-        if (Array.isArray(d) && d[0] === 'EVENT' && d[1] === subId && d[2] && d[2].content === nonce) finish('relay', 'round-trip ok');
-      };
-    })
-  );
-}
-/* Probe every relay of every loaded strategy in parallel; resolves to
-   { mqtt:[{url,ok,detail}…], nostr:[{url,ok,relay,status,detail}…], torrent:[…] }.
-   nostr gets the round-trip probe; mqtt/torrent get the socket-open probe. */
-function runSignalingProbe() {
-  const names = availableStrategies();
-  return Promise.all(names.map(async name => {
-    const urls = RELAY_URLS[name] || [];
-    let results;
-    if (name === 'nostr') {
-      results = await Promise.all(urls.map(u => probeNostrRelay(u)));
-    } else {
-      const sub = name === 'mqtt' ? 'mqtt' : null; // MQTT brokers want the subprotocol on the WS upgrade
-      results = await Promise.all(urls.map(u => probeRelay(u, sub)));
-    }
-    return [name, results];
-  })).then(pairs => Object.fromEntries(pairs));
-}
-
-/* ── On-screen connection diagnostics ────────────────────────────────────────
-   A self-contained, collapsible panel (created in JS so it needs no markup in
-   the teacher/student views). It surfaces exactly what's happening on the wire —
-   which discovery networks loaded, which one connected, and the TURN self-test —
-   so a failed classroom test can be understood WITHOUT opening DevTools. The
-   "Copy report" button yields a shareable text summary. */
-const Diag = {
-  panel: null, role: '', strategies: {}, probe: undefined, signaling: undefined, lines: [], open: true,
-
-  init(role) {
-    this.role = role;
-    if (this.panel) return;
-    const p = document.createElement('div');
-    p.id = 'diag';
-    p.style.cssText = 'position:fixed;right:12px;bottom:12px;z-index:80;width:340px;max-width:calc(100vw - 24px);font-family:"JetBrains Mono",ui-monospace,monospace;font-size:11px;line-height:1.5;';
-    p.innerHTML =
-      '<button id="diag-toggle" style="width:100%;text-align:left;background:#0a1f3c;color:#dbe6f2;border:1px solid #0a3d91;border-radius:8px 8px 0 0;padding:7px 10px;font:inherit;font-weight:700;cursor:pointer;display:flex;justify-content:space-between;align-items:center;gap:8px;">'
-    + '<span><span id="diag-led" style="display:inline-block;width:8px;height:8px;border-radius:99px;background:#c77d16;margin-right:7px;"></span>Connection diagnostics</span><span id="diag-caret">▾</span></button>'
-    + '<div id="diag-card" style="background:#071630;color:#c7d6e8;border:1px solid #0a3d91;border-top:none;border-radius:0 0 8px 8px;padding:9px 10px;box-shadow:0 12px 32px -12px rgba(0,0,0,.6);">'
-    + '<div id="diag-summary" style="margin-bottom:7px;"></div>'
-    + '<div id="diag-log" style="max-height:180px;overflow:auto;border-top:1px solid #14315e;padding-top:6px;white-space:pre-wrap;word-break:break-word;"></div>'
-    + '<div style="display:flex;gap:6px;margin-top:8px;">'
-    + '<button id="diag-copy" style="flex:1;background:#1668e3;color:#fff;border:none;border-radius:6px;padding:6px;font:inherit;font-weight:700;cursor:pointer;">Copy report</button>'
-    + '<button id="diag-clear" style="background:#0a3d91;color:#cfe0fb;border:none;border-radius:6px;padding:6px 9px;font:inherit;cursor:pointer;">Clear</button>'
-    + '</div></div>';
-    document.body.appendChild(p);
-    this.panel = p;
-    p.querySelector('#diag-toggle').onclick = () => this.toggle();
-    p.querySelector('#diag-copy').onclick = () => this.copy();
-    p.querySelector('#diag-clear').onclick = () => { this.lines = []; this.render(); };
-    this.render();
-  },
-
-  toggle() {
-    this.open = !this.open;
-    this.panel.querySelector('#diag-card').style.display = this.open ? '' : 'none';
-    this.panel.querySelector('#diag-caret').textContent = this.open ? '▾' : '▴';
-  },
-
-  log(msg) {
-    const t = new Date().toLocaleTimeString([], { hour12: false });
-    this.lines.push(t + '  ' + msg);
-    if (this.lines.length > 200) this.lines.shift();
-    this.render();
-  },
-
-  setStrategy(name, patch) { this.strategies[name] = Object.assign(this.strategies[name] || {}, patch); this.render(); },
-  setProbe(r) { this.probe = r; this.render(); },
-  setSignaling(s) { this.signaling = s; this.render(); },
-
-  probeSummary(r) {
-    if (!r) return 'running…';
-    if (r.error) return 'error: ' + r.error;
-    return 'host ' + (r.host ? '✓' : '✗') + ' · STUN ' + (r.srflx ? '✓' : '✗')
-         + ' · TURN ' + (r.relay ? '✓' + (r.relayTcp ? '(tcp)' : '') : '✗');
-  },
-
-  /* Signaling reachability for one network: {ok,total} from the last probe, or
-     null if it hasn't run / that network wasn't probed. */
-  sigStat(name) {
-    const arr = this.signaling && this.signaling[name];
-    if (!arr) return null;
-    return { ok: arr.filter(x => x.ok).length, total: arr.length };
-  },
-  /* Count of relays that passed the round-trip test (actually forward events).
-     Only meaningful for round-trip-probed networks (nostr); null otherwise. */
-  sigRelaying(name) {
-    const arr = this.signaling && this.signaling[name];
-    if (!arr || !arr.some(x => 'relay' in x)) return null;
-    return arr.filter(x => x.relay).length;
-  },
-  /* nostr round-trip one-liner, e.g. "1/12 relaying", or null if not probed. */
-  nostrRelaySummary() {
-    const r = this.sigRelaying('nostr'), s = this.sigStat('nostr');
-    return (r == null || !s) ? null : r + '/' + s.total + ' relaying';
-  },
-  /* One-line socket-reachability summary across networks, e.g.
-     "mqtt 0/3 · nostr 3/12 · torrent 2/3" (sockets that OPENED). */
-  signalingSummary() {
-    if (!this.signaling) return 'running…';
-    const parts = DISCOVERY_ORDER.filter(n => this.signaling[n]).map(n => {
-      const s = this.sigStat(n); return n + ' ' + s.ok + '/' + s.total;
-    });
-    return parts.join(' · ') || 'none';
-  },
-  /* Aggregate relay reachability across every probed network, for the failure
-     UX. Returns {reachable,total,frac} or null if the probe hasn't produced a
-     result yet. A single school test taught us NOT to treat "≥1 relay open" as
-     "network is fine": that classroom had nostr 1/4 (+ mqtt 0/3, torrent 0/3) —
-     only 1 of 10 routes open — and the peers still couldn't meet, yet the old
-     logic told the student "no one is hosting" while the teacher WAS hosting.
-     So callers judge by the COUNT of usable relays (0 = blocked, 1 = fragile
-     single point of failure, 2+ = the network can carry signaling), not by "any".
-     "Usable" means: for round-trip-probed networks (nostr) the relay actually
-     forwarded our event; for the others (mqtt/torrent) the socket merely opened.
-     So a relay that "opens but doesn't forward events" correctly counts as
-     unusable — the exact trap the first school test fell into. (`frac` is still
-     returned but callers prefer `reachable`.) */
-  relayReachRatio() {
-    if (!this.signaling) return null;
-    const names = DISCOVERY_ORDER.filter(n => this.signaling[n]);
-    if (!names.length) return null;
-    let reachable = 0, total = 0;
-    names.forEach(n => this.signaling[n].forEach(x => { total++; if ('relay' in x ? x.relay : x.ok) reachable++; }));
-    return total ? { reachable, total, frac: reachable / total } : null;
-  },
-
-  /* Overall LED: green once any network has an actual peer; amber while trying;
-     red once every loaded network is unusable — either failed to load or (per
-     the signaling probe) has no reachable relay for peers to meet on. */
-  ledColor() {
-    const names = DISCOVERY_ORDER.filter(n => this.strategies[n]);
-    if (names.some(n => this.strategies[n].peer)) return '#0f9d74';
-    if (names.length && names.every(n => {
-      const s = this.strategies[n], sig = this.sigStat(n);
-      return s.error || (sig && sig.ok === 0); // dead: won't load, or every relay blocked
-    })) return '#e5484d';
-    return '#c77d16';
-  },
-
-  render() {
-    if (!this.panel) return;
-    this.panel.querySelector('#diag-led').style.background = this.ledColor();
-    const order = DISCOVERY_ORDER.filter(n => this.strategies[n]);
-    const netRows = order.map(n => {
-      const s = this.strategies[n];
-      const sig = this.sigStat(n);
-      // While searching, the relay probe disambiguates "connected, no peer yet"
-      // from "every relay blocked" — the distinction the old panel couldn't show.
-      let searching = 'searching…';
-      if (sig) {
-        const relaying = this.sigRelaying(n); // nostr: how many actually forward events
-        if (sig.ok === 0) {
-          searching = '<span style="color:#f2999c;font-weight:700;">blocked 0/' + sig.total + '</span>';
-        } else if (relaying != null) {
-          // nostr: sockets that opened AND how many round-tripped (the real signal)
-          searching = (relaying > 0 ? 'searching… ' : '<span style="color:#f2999c;font-weight:700;">no relay </span>')
-            + '<span style="color:#9fb6d6;">(open ' + sig.ok + '/' + sig.total + ', relaying ' + relaying + ')</span>';
-        } else {
-          searching = 'searching… <span style="color:#9fb6d6;">(relays ' + sig.ok + '/' + sig.total + ')</span>';
-        }
-      }
-      const state = s.error ? '<span style="color:#f2999c;">load failed</span>'
-        : s.peer ? '<span style="color:#6ee0b8;font-weight:700;">CONNECTED ✓</span>'
-        : s.joined ? '<span style="color:#e9c07a;">' + searching + '</span>'
-        : '<span style="color:#8aa0c0;">—</span>';
-      return '<div style="display:flex;justify-content:space-between;gap:8px;"><span style="color:#9fb6d6;">' + n + '</span>' + state + '</div>';
-    }).join('');
-    let interp = '';
-    if (this.probe && !this.probe.error) {
-      interp = this.probe.relay
-        ? '<div style="color:#6ee0b8;margin-top:4px;">TURN reachable — data channel can form.</div>'
-        : '<div style="color:#f2999c;margin-top:4px;">TURN unreachable — on a locked-down network the data channel may never form.</div>';
-    }
-    // Signaling verdict: no relay reachable anywhere = discovery is firewalled,
-    // which is the failure the TURN test can't see.
-    let sigInterp = '';
-    const rr = this.relayReachRatio();
-    if (rr) {
-      sigInterp = rr.reachable === 0
-        ? '<div style="color:#f2999c;margin-top:2px;">No usable discovery relay — this network blocks discovery, or the relays that open don\'t forward events (TURN alone can\'t connect peers).</div>'
-        : rr.reachable < 2
-          ? '<div style="color:#e9c07a;margin-top:2px;">Only ' + rr.reachable + ' usable relay — fragile; both devices must independently reach the same one, so a link may not form.</div>'
-          : '<div style="color:#6ee0b8;margin-top:2px;">' + rr.reachable + ' usable relays — peers should be able to meet.</div>';
-    }
-    const nrs = this.nostrRelaySummary();
-    this.panel.querySelector('#diag-summary').innerHTML =
-      '<div style="color:#9fb6d6;">role: <b style="color:#dbe6f2;">' + (this.role || '—') + '</b></div>'
-      + '<div style="margin-top:4px;color:#9fb6d6;">TURN/STUN self-test: <b style="color:#dbe6f2;">' + this.probeSummary(this.probe) + '</b></div>'
-      + interp
-      + '<div style="margin-top:4px;color:#9fb6d6;">Discovery relays (open): <b style="color:#dbe6f2;">' + this.signalingSummary() + '</b></div>'
-      + (nrs ? '<div style="margin-top:2px;color:#9fb6d6;">Nostr round-trip: <b style="color:#dbe6f2;">' + nrs + '</b></div>' : '')
-      + sigInterp
-      + (netRows ? '<div style="margin-top:6px;border-top:1px solid #14315e;padding-top:5px;">' + netRows + '</div>' : '');
-    const logEl = this.panel.querySelector('#diag-log');
-    logEl.textContent = this.lines.join('\n');
-    logEl.scrollTop = logEl.scrollHeight;
-  },
-
-  report() {
-    const lines = [];
-    lines.push('StatGather connection report');
-    lines.push('role: ' + this.role);
-    lines.push('when: ' + new Date().toISOString());
-    lines.push('ua: ' + navigator.userAgent);
-    lines.push('TURN/STUN self-test: ' + this.probeSummary(this.probe));
-    lines.push('discovery relays (socket open): ' + this.signalingSummary());
-    const nrs = this.nostrRelaySummary();
-    if (nrs) lines.push('nostr round-trip (actually relaying): ' + nrs);
-    lines.push('strategies loaded: ' + (availableStrategies().join(', ') || 'none'));
-    const failed = (window.Trystero && window.Trystero.failed) || {};
-    if (Object.keys(failed).length) lines.push('strategies failed to load: ' + Object.keys(failed).join(', '));
-    DISCOVERY_ORDER.filter(n => this.strategies[n]).forEach(n => {
-      const s = this.strategies[n];
-      const sig = this.sigStat(n);
-      const relaying = this.sigRelaying(n);
-      const sigTxt = sig ? ' [open ' + sig.ok + '/' + sig.total + (relaying != null ? ', relaying ' + relaying : '') + ']' : '';
-      lines.push('  ' + n + ': ' + (s.error ? 'load failed (' + s.error + ')' : s.peer ? 'CONNECTED' : s.joined ? 'searching' : 'idle') + sigTxt);
-    });
-    // Per-URL reachability so a failed test names exactly which endpoints worked.
-    // For nostr, ✓ = round-tripped (usable), ~ = opened but didn't relay, ✗ = blocked.
-    if (this.signaling) {
-      lines.push('--- relay reachability ---');
-      DISCOVERY_ORDER.filter(n => this.signaling[n]).forEach(n => {
-        this.signaling[n].forEach(x => {
-          let mark, extra = '';
-          if ('relay' in x) {           // nostr round-trip result
-            mark = x.relay ? '✓' : (x.ok ? '~' : '✗');
-            extra = x.relay ? ' relaying' : (x.ok ? ' opens but not relaying' : ' (' + x.detail + ')');
-          } else {                       // mqtt/torrent socket-open result
-            mark = x.ok ? '✓' : '✗';
-            extra = x.ok ? '' : ' (' + x.detail + ')';
-          }
-          lines.push('  ' + mark + ' ' + n + ' ' + x.url + extra);
-        });
-      });
-    }
-    lines.push('--- log ---');
-    return lines.concat(this.lines).join('\n');
-  },
-
-  copy() {
-    const text = this.report();
-    const done = () => toast('Diagnostics copied — paste it to share');
-    if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(done).catch(() => this._fallbackCopy(text, done));
-    else this._fallbackCopy(text, done);
-  },
-  _fallbackCopy(text, done) {
-    const ta = document.createElement('textarea'); ta.value = text; document.body.appendChild(ta); ta.select();
-    try { document.execCommand('copy'); done(); } catch (e) { toast('Copy failed — select the log manually', 'bad'); }
-    ta.remove();
-  },
-};
+/* PeerJS options. `config` routes ICE (including the TURN relay in RTC_CONFIG)
+   through the peer connection so the data channel can still form on restrictive
+   networks. To use a self-hosted PeerServer instead of PeerJS's public cloud,
+   add { host, port, path, secure } here. */
+function peerOptions() { return { debug: 1, config: window.RTC_CONFIG }; }
 
 /* ============================================================================
    4. TEACHER MODE
    ============================================================================ */
 const Teacher = {
-  rooms: [], code: null,      // rooms: one context per live discovery network
-  conns: new Map(),           // peerId -> Set<ctx>  (the rooms that peer is currently in)
+  peer: null, code: null,     // PeerJS host peer
+  conns: new Map(),           // conn.peer -> { conn }  (one open data channel per student)
   submittedCids: new Map(),   // persistent client id -> submission count (survives reconnects)
 
   /* ── Workspace: several named datasets in one session (view one at a time) ──
@@ -1360,113 +894,72 @@ const Teacher = {
     $('#t-link').value = joinLinkFor(this.code);
   },
 
-  /* --- Trystero host: join a room named after the 4-char code on EVERY available
-         discovery network at once. A student who joins the same room over any one
-         of those networks discovers us and opens a direct WebRTC data channel —
-         there's no single signaling server to be blocked. The three actions per
-         room mirror the old PeerJS message types. --- */
-  async initPeer() {
+  /* --- PeerJS host: claim a stable peer id derived from the room code so a
+         student who knows only the 4-char code can reach us. The signaling
+         server only introduces the browsers; survey data then flows directly
+         peer-to-peer. --- */
+  initPeer(attempt = 0) {
     this.setConn('starting', 'Starting…');
-    Diag.init('teacher (host)');
-    await whenTransportReady();
-    Diag.log('Transport ready.');
-    // Kick off the independent TURN/STUN self-test (doesn't depend on discovery).
-    runIceProbe(window.RTC_CONFIG).then(r => { Diag.setProbe(r); Diag.log('TURN/STUN self-test: ' + Diag.probeSummary(r)); });
-    // …and the independent discovery-reachability probe: which relays this
-    // network actually lets through (the layer a school firewall blocks).
-    runSignalingProbe().then(s => { Diag.setSignaling(s); Diag.log('Discovery relays (open): ' + Diag.signalingSummary()); const nr = Diag.nostrRelaySummary(); if (nr) Diag.log('Nostr round-trip: ' + nr); });
+    this.peer = new Peer(PEER_PREFIX + this.code, peerOptions());
 
-    const names = availableStrategies();
-    const failed = Object.keys((window.Trystero && window.Trystero.failed) || {});
-    if (failed.length) Diag.log('Networks that failed to load: ' + failed.join(', '));
-    Diag.log('Hosting on: ' + (names.join(', ') || 'none'));
-    if (!names.length) {
-      this.setConn('bad', "Couldn't start room");
-      toast('No discovery network could load — check the connection and reload.', 'bad');
-      return;
-    }
-
-    this.rooms = [];
-    for (const name of names) {
-      let room;
-      try {
-        room = window.Trystero.strategies[name]({ appId: TRYSTERO_APP_ID, rtcConfig: window.RTC_CONFIG, relayConfig: relayConfigFor(name) }, this.code);
-      } catch (e) {
-        Diag.setStrategy(name, { error: String(e) });
-        Diag.log('[' + name + '] joinRoom failed: ' + e);
-        continue;
+    this.peer.on('open', () => this.setConn('ok', 'Room live'));
+    this.peer.on('connection', conn => this.onStudentConnect(conn));
+    this.peer.on('disconnected', () => {
+      this.setConn('warn', 'Reconnecting…');
+      try { this.peer.reconnect(); } catch (e) {}
+    });
+    this.peer.on('error', err => {
+      console.warn('[StatGather host] peer error:', err.type, err);
+      if (err.type === 'unavailable-id' && attempt < 5) {
+        // Code collision on the signaling server — pick a fresh code and retry.
+        this.code = makeCode(); this.renderIdentity();
+        try { this.peer.destroy(); } catch (e) {}
+        return this.initPeer(attempt + 1);
       }
-      const ctx = {
-        name, room,
-        actConfig: room.makeAction('config'),
-        actAck: room.makeAction('ack'),
-        actSubmit: room.makeAction('submit'),
-      };
-      Diag.setStrategy(name, { joined: true });
-      Diag.log('[' + name + '] room live, waiting for students…');
-
-      // NOTE: Trystero uses one selfId per page across ALL strategies, so the
-      // SAME peerId shows up in every room. We therefore track, per peer, the
-      // SET of rooms it's currently in — a "leave" on one network must not evict
-      // a student who's still connected on another — and we always reply over the
-      // room a message actually arrived on (never a stored one, which may be a
-      // room the student has since left).
-      room.onPeerJoin = peerId => {
-        let set = this.conns.get(peerId);
-        if (!set) { set = new Set(); this.conns.set(peerId, set); }
-        set.add(ctx);
-        Diag.setStrategy(name, { peer: true });
-        Diag.log('[' + name + '] student connected (' + peerId.slice(0, 6) + '…) — data channel open ✓');
-        this.updateCount();
-        this.sendConfigOver(ctx, peerId); // greet the newcomer with the current survey
-      };
-      room.onPeerLeave = peerId => {
-        const set = this.conns.get(peerId);
-        if (set) { set.delete(ctx); if (!set.size) this.conns.delete(peerId); }
-        Diag.log('[' + name + '] student left (' + peerId.slice(0, 6) + '…)');
-        this.updateCount();
-      };
-      ctx.actSubmit.onMessage = (msg, { peerId }) => this.onStudentData(peerId, msg, ctx);
-      this.rooms.push(ctx);
-    }
-
-    // Ready to host. (Trystero handles relay reconnection internally; if every
-    // network is unreachable, no student can join — the bulk/manual entry remains
-    // as the offline fallback.)
-    this.setConn('ok', 'Room live');
+      if (err.type === 'unavailable-id') {
+        this.setConn('bad', "Couldn't start room");
+        toast('Could not claim a room code — reload to retry.', 'bad');
+      } else if (err.type === 'network' || err.type === 'server-error' || err.type === 'socket-error' || err.type === 'server-disconnected') {
+        this.setConn('bad', 'Network blocked');
+        toast('Signaling server unreachable — check the connection or the network allowlist.', 'bad');
+      } else if (err.type === 'browser-incompatible') {
+        this.setConn('bad', 'Unsupported browser');
+      }
+    });
   },
 
-  onStudentData(peerId, msg, ctx) {
-    if (!msg) return;
-    // Enforce the teacher's "allow multiple" setting by a PERSISTENT client id so
-    // a refresh/reconnect (which mints a new peer id) can't slip past the limit.
-    const cid = typeof msg.cid === 'string' && msg.cid ? msg.cid : peerId;
-    const prior = this.submittedCids.get(cid) || 0;
-    if (!this.config.allowMultiple && prior >= 1) {
-      this.sendAck(ctx, peerId, { ok: false, reason: 'locked' });
-      return;
-    }
-    const parsed = this.parseValue(msg.value);
-    if (parsed === null) { this.sendAck(ctx, peerId, { ok: false, reason: 'invalid' }); return; }
+  onStudentConnect(conn) {
+    conn.on('open', () => {
+      this.conns.set(conn.peer, { conn });
+      this.updateCount();
+      this.sendConfig(conn); // greet the newcomer with the current survey
+    });
+    conn.on('data', msg => this.onStudentData(conn, msg));
+    conn.on('close', () => { this.conns.delete(conn.peer); this.updateCount(); });
+    conn.on('error', () => { this.conns.delete(conn.peer); this.updateCount(); });
+  },
 
+  onStudentData(conn, msg) {
+    if (!msg || msg.type !== 'DATA_SUBMIT') return;
+    if (!this.conns.has(conn.peer)) return; // ignore frames from a closed connection
+    // Enforce "allow multiple" by a PERSISTENT client id so a refresh/reconnect
+    // (which mints a new peer id) can't slip past the limit.
+    const cid = typeof msg.cid === 'string' && msg.cid ? msg.cid : conn.peer;
+    const prior = this.submittedCids.get(cid) || 0;
+    if (!this.config.allowMultiple && prior >= 1) { this.send(conn, { type: 'ACK', ok: false, reason: 'locked' }); return; }
+    const parsed = this.parseValue(msg.value);
+    if (parsed === null) { this.send(conn, { type: 'ACK', ok: false, reason: 'invalid' }); return; }
     this.addEntry(parsed);
     this.submittedCids.set(cid, prior + 1);
-    this.sendAck(ctx, peerId, { ok: true, allowMultiple: this.config.allowMultiple });
+    this.send(conn, { type: 'ACK', ok: true, allowMultiple: this.config.allowMultiple });
   },
 
-  /* Acks and greetings go back over the SAME room the request arrived on. */
-  sendAck(ctx, peerId, payload) { try { ctx.actAck.send(payload, { target: peerId }); } catch (e) {} },
-  sendConfigOver(ctx, target) {
-    const payload = { question: this.config.question, dataType: this.config.dataType, allowMultiple: this.config.allowMultiple };
-    try { ctx.actConfig.send(payload, { target }); } catch (e) {}
-  },
+  send(conn, payload) { try { conn.send(payload); } catch (e) {} },
+  sendConfig(conn) { this.send(conn, { type: 'CONFIG', question: this.config.question, dataType: this.config.dataType, allowMultiple: this.config.allowMultiple }); },
 
-  /* Broadcast the current survey config to everyone on every network (used when
+  /* Broadcast the current survey config to every connected student (used when
      the teacher edits the prompt mid-session). */
-  broadcastConfig() {
-    const payload = { question: this.config.question, dataType: this.config.dataType, allowMultiple: this.config.allowMultiple };
-    for (const ctx of this.rooms) { try { ctx.actConfig.send(payload, {}); } catch (e) {} }
-  },
+  broadcastConfig() { this.conns.forEach(({ conn }) => this.sendConfig(conn)); },
 
   /* Parse an incoming/manual value according to the configured data type.
      Strict on purpose: the host trusts the wire, so "12abc" or "1e309" from a
@@ -2385,7 +1878,7 @@ const Sim = {
    5. STUDENT MODE
    ============================================================================ */
 const Student = {
-  rooms: [], active: null, actSubmit: null, teacherId: null, code: null,
+  peer: null, conn: null, code: null,
   config: { question: '…', dataType: 'continuous', allowMultiple: false },
   submittedCount: 0, lastValue: null, awaitingAck: false, _token: 0,
 
@@ -2435,23 +1928,7 @@ const Student = {
     ['join', 'submit', 'done', 'error-state'].forEach(s => $('#s-' + s).classList.toggle('hidden', s !== step));
   },
 
-  /* Leave every room we're currently in. */
-  leaveAll() {
-    if (this.rooms) for (const ctx of this.rooms) { try { ctx.room.leave(); } catch (e) {} }
-    this.rooms = [];
-  },
-  /* Once one network reaches the teacher, drop the others — one clean connection
-     instead of a redundant mesh, and the teacher's "connected" count stays honest. */
-  leaveOthers(keep) {
-    for (const ctx of this.rooms) {
-      if (ctx === keep) continue;
-      try { ctx.room.leave(); } catch (e) {}
-      Diag.log('[' + ctx.name + '] closed (connected via ' + keep.name + ').');
-    }
-    this.rooms = [keep];
-  },
-
-  async connect(code) {
+  connect(code) {
     this.code = code;
     $('#s-code').textContent = 'STAT-' + code;
     this.setBadge('connecting', 'Connecting…');
@@ -2459,107 +1936,35 @@ const Student = {
     $('#s-question').textContent = 'Connecting to the room…';
     $('#s-send').disabled = true;
 
-    Diag.init('student');
-    await whenTransportReady();
-    Diag.log('Transport ready. Joining STAT-' + code + ' on all networks…');
-    runIceProbe(window.RTC_CONFIG).then(r => { Diag.setProbe(r); Diag.log('TURN/STUN self-test: ' + Diag.probeSummary(r)); });
-    runSignalingProbe().then(s => { Diag.setSignaling(s); Diag.log('Discovery relays (open): ' + Diag.signalingSummary()); const nr = Diag.nostrRelaySummary(); if (nr) Diag.log('Nostr round-trip: ' + nr); });
-
-    // Leave any previous rooms, then join the code on every available network.
-    this.leaveAll();
-    this.teacherId = null; this.active = null; this.actSubmit = null;
-
-    const names = availableStrategies();
-    const failed = Object.keys((window.Trystero && window.Trystero.failed) || {});
-    if (failed.length) Diag.log('Networks that failed to load: ' + failed.join(', '));
-    Diag.log('Trying: ' + (names.join(', ') || 'none'));
-    if (!names.length) { this.fail('No discovery network could load. Check your internet connection and reload.'); return; }
+    // Fresh peer each attempt; the signaling server assigns us a random id.
+    try { if (this.peer) this.peer.destroy(); } catch (e) {}
+    this.peer = new Peer(peerOptions());
 
     let settled = false;
-    // No teacher on ANY network in time means one of three things — and the
-    // signaling probe (resolves within ~8s, well before this 20s timeout) tells
-    // us WHICH, so the student gets an actionable message instead of a guess:
-    //   • some relay reachable → the network is fine, so it's a wrong/expired
-    //     code or the teacher hasn't started hosting yet.
-    //   • no relay reachable   → this network is blocking discovery outright;
-    //     switch to mobile data, or fall back to the teacher's bulk entry.
-    const failTimer = setTimeout(() => {
-      if (!settled) {
-        const r = Diag.relayReachRatio();      // {reachable,total,frac} | null
-        let title = 'Can\'t reach the room', msg;
-        if (r && r.reachable === 0) {
-          // Every route blocked → unambiguously the network.
-          Diag.log('No teacher found in 20s — every discovery relay is blocked on this network.');
-          title = 'This network is blocking the connection';
-          msg = 'Every connection route is blocked here — this is the network, not the code (STAT-' + code + '). '
-              + 'If you can, switch this device to mobile data or a hotspot and tap Try again. '
-              + 'Otherwise, read your answer to your teacher — they can add it directly using the Bulk option on their screen.';
-        } else if (r && r.reachable < 2) {
-          // Just one usable relay: fragile. Both devices must independently reach
-          // the SAME relay, and a restricted network fails this way too — so we
-          // can't confidently blame the code/teacher.
-          Diag.log('No teacher found in 20s — only ' + r.reachable + ' usable relay, link not forming.');
-          title = 'This network is heavily restricted';
-          msg = 'Almost every connection route is blocked here (only ' + r.reachable + ' of ' + r.total + ' works), and the link isn\'t forming. '
-              + 'Double-check the code (STAT-' + code + '); if it\'s right, the network is the likely cause — switch this device to mobile data or a hotspot, '
-              + 'or give your teacher your value to enter with the Bulk option on their screen.';
-        } else if (r) {
-          // Two or more relays actually forward events → the network can carry
-          // signaling, so a failure is most likely no host / wrong code.
-          Diag.log('No teacher found in 20s — ' + r.reachable + ' usable relays, so the room likely isn\'t being hosted.');
-          title = 'No one is hosting that code';
-          msg = 'Your network looks fine, but no teacher seems to be hosting STAT-' + code + ' right now. '
-              + 'Double-check the code, and make sure your teacher has started the session — then tap Try again.';
-        } else {
-          Diag.log('No teacher found on any network within 20s.');
-          msg = 'No session found for code STAT-' + code + '. Check the code with your teacher — the room may not be running yet, or the network may be blocking every connection. Ask for the bulk-entry option if this persists.';
-        }
-        this.fail(msg, title);
-      }
-    }, 20000);
+    const failTimer = setTimeout(() => { if (!settled) this.fail('The room didn\'t respond. It may not be running yet, or the network may be blocking the connection.'); }, 15000);
 
-    this.rooms = [];
-    for (const name of names) {
-      let room;
-      try {
-        room = window.Trystero.strategies[name]({ appId: TRYSTERO_APP_ID, rtcConfig: window.RTC_CONFIG, relayConfig: relayConfigFor(name) }, code);
-      } catch (e) {
-        Diag.setStrategy(name, { error: String(e) });
-        Diag.log('[' + name + '] join failed: ' + e);
-        continue;
-      }
-      const ctx = {
-        name, room,
-        actConfig: room.makeAction('config'),
-        actAck: room.makeAction('ack'),
-        actSubmit: room.makeAction('submit'),
-      };
-      Diag.setStrategy(name, { joined: true });
-      Diag.log('[' + name + '] joined, looking for the teacher…');
+    this.peer.on('open', () => {
+      this.conn = this.peer.connect(PEER_PREFIX + code, { reliable: true });
+      this.conn.on('open', () => { settled = true; clearTimeout(failTimer); this.setBadge('ok', 'Connected'); $('#s-send').disabled = false; });
+      this.conn.on('data', msg => this.onData(msg));
+      this.conn.on('close', () => { if (settled) this.setBadge('bad', 'Disconnected'); });
+      this.conn.on('error', () => { if (!settled) { settled = true; clearTimeout(failTimer); this.fail('Couldn\'t open a channel to the room.'); } });
+    });
 
-      // The teacher is the only peer that sends 'config'; the FIRST network to
-      // deliver it wins and becomes the one we submit over.
-      ctx.actConfig.onMessage = (msg, { peerId }) => {
-        Diag.setStrategy(name, { peer: true });
-        if (!settled) {
-          settled = true; clearTimeout(failTimer);
-          this.active = ctx; this.teacherId = peerId; this.actSubmit = ctx.actSubmit;
-          this.setBadge('ok', 'Connected');
-          $('#s-send').disabled = false;
-          Diag.log('[' + name + '] reached the teacher ✓ — using this network.');
-          this.leaveOthers(ctx);
-        }
-        this.onConfig(msg);
-      };
-      ctx.actAck.onMessage = msg => this.onAck(msg);
-      room.onPeerLeave = peerId => {
-        if (settled && this.active === ctx && peerId === this.teacherId) {
-          this.setBadge('bad', 'Disconnected');
-          Diag.log('[' + name + '] lost the teacher.');
-        }
-      };
-      this.rooms.push(ctx);
-    }
+    this.peer.on('error', err => {
+      console.warn('[StatGather student] peer error:', err.type, err);
+      if (settled) return;
+      settled = true; clearTimeout(failTimer);
+      if (err.type === 'peer-unavailable') this.fail('No session found for code STAT-' + code + '. Check the code with your teacher — the room may not be running yet.');
+      else if (err.type === 'network' || err.type === 'server-error' || err.type === 'socket-error' || err.type === 'server-disconnected') this.fail('The network seems to be blocking the connection. Ask your teacher for the bulk-entry option.');
+      else this.fail('Something went wrong connecting. Tap Try again.');
+    });
+  },
+
+  onData(msg) {
+    if (!msg) return;
+    if (msg.type === 'CONFIG') this.onConfig(msg);
+    else if (msg.type === 'ACK') this.onAck(msg);
   },
 
   fail(msg, title) {
@@ -2618,7 +2023,7 @@ const Student = {
 
   submit() {
     if (this.awaitingAck) return;
-    if (!this.actSubmit || !this.teacherId) { $('#s-error').textContent = 'Not connected. Reconnecting…'; this.connect(this.code); return; }
+    if (!this.conn || !this.conn.open) { $('#s-error').textContent = 'Not connected. Reconnecting…'; this.connect(this.code); return; }
     const res = this.validate($('#s-value').value);
     if (!res.ok) { $('#s-error').textContent = res.msg; $('#s-value').focus(); return; }
     this.lastValue = res.value;
@@ -2626,7 +2031,7 @@ const Student = {
     const token = (this._token = this._token + 1);
     $('#s-send').disabled = true;
     $('#s-send').innerHTML = `<span class="icon spin" data-icon="broadcast"></span>Sending…`; paintIcons($('#s-send'));
-    try { this.actSubmit.send({ value: res.value, cid: this.clientId() }, { target: this.teacherId }); }
+    try { this.conn.send({ type: 'DATA_SUBMIT', value: res.value, cid: this.clientId() }); }
     catch (e) { this.awaitingAck = false; $('#s-send').disabled = false; $('#s-send').textContent = 'Submit response'; $('#s-error').textContent = 'Send failed. Try again.'; return; }
     // If no ACK ever arrives, DON'T claim success — the value may never have
     // reached the teacher. Show an honest "couldn't confirm" state instead.
