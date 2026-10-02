@@ -1,0 +1,25 @@
+# StatGather backend — Cloudflare Worker + Durable Object.
+# Serves the static app (index.html) AND the /api from one origin.
+#
+# Local run:   npx wrangler dev          (http://localhost:8787)
+# Deploy:      npx wrangler deploy        (needs a free Cloudflare account)
+
+name = "statgather"
+main = "worker/worker.js"
+compatibility_date = "2025-01-01"
+
+# Import index.html (at the repo root) into the Worker bundle as a text module,
+# so the Worker can serve the app from the same origin as the API.
+rules = [
+  { type = "Text", globs = ["**/*.html"], fallthrough = true },
+]
+
+# One Durable Object per room code = one ephemeral session.
+[[durable_objects.bindings]]
+name = "ROOM"
+class_name = "Room"
+
+# SQLite-backed DO class — required to use Durable Objects on the FREE plan.
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["Room"]

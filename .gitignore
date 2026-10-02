@@ -8,3 +8,8 @@ docs/
 .DS_Store
 Thumbs.db
 *.log
+
+# Backend (Cloudflare Worker) tooling
+node_modules/
+.wrangler/
+.dev.vars
