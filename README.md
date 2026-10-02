@@ -2,9 +2,9 @@
 
 **Collect a whole class's data live, compute the statistics, and see the distribution — right from the front of the room.**
 
-StatGather is a single-file, serverless web app for teaching statistics. The teacher opens a session on the projector; students join from their laptops with a 4‑character room code and submit data points that travel **directly** to the teacher's browser over a peer‑to‑peer WebRTC connection. StatGather computes the summary statistics and draws the distribution as the numbers arrive.
+StatGather is a web app for teaching statistics. The teacher opens a session on the projector; students join from their laptops with a 4‑character room code and submit data points to **one web service over ordinary HTTPS**. The teacher's browser reads the live updates from that same service; StatGather computes the summary statistics and draws the distribution as the numbers arrive.
 
-No accounts. No spreadsheet. No server. No student data is ever stored anywhere but the teacher's screen.
+No accounts. No spreadsheet. No peer‑to‑peer. All traffic goes to a single, filterable HTTPS domain — see [DEPLOY.md](DEPLOY.md) for the backend and how to deploy it.
 
 **Live app:** https://statgather-app.github.io/
 
@@ -25,7 +25,7 @@ No accounts. No spreadsheet. No server. No student data is ever stored anywhere 
   - **Stem‑and‑leaf** plot
   - **Bar / pie / frequency** views for categorical data
 - **Export to CSV** at any time.
-- **Bulk paste** or manual entry as a fallback if the school network blocks peer‑to‑peer traffic.
+- **Bulk paste** or manual entry as a fallback for data collected another way.
 - Toggle whether students may submit **more than one** response.
 - **Work with several datasets at once** — hold multiple named datasets as tabs and view any one while students keep submitting into the live survey. **Combine** (pool) and **Split** (by threshold or by category) build new datasets **non‑destructively**.
 - **Simulate an experiment** — draw from a probability model (coin, die, spinner, uniform int/real, normal, binomial, poisson, exponential), repeat the trial many times with a **seedable RNG**, and record a statistic (sum, mean, count/proportion by condition, min/max/range/median/sd, category count, distinct, …). The resulting distribution becomes a new dataset that flows into the same summary stats and charts.
@@ -119,55 +119,75 @@ If your badge turns red / says **Disconnected**, click **Try again**, or ask you
 
 ## How it works
 
-- **Peer‑to‑peer, serverless.** Student browsers connect directly to the teacher's browser over WebRTC, using [Trystero](https://github.com/dmotz/trystero) to find each other through public infrastructure rather than a single signaling server. To survive locked‑down school networks, the teacher and students join the room over **three discovery networks at once** — MQTT brokers, Nostr relays, and BitTorrent trackers — and the connection forms over whichever one the firewall doesn't block. There is no backend and no database — the entire app is one static HTML file.
-- **Privacy by design.** Data lives only in the teacher's browser tab for the duration of the session. Closing the tab discards it. Nothing is uploaded or persisted.
+- **Client‑server, single origin.** A small [Cloudflare Worker](worker/) serves both the app (one HTML file) **and** its API from one domain. Student browsers `POST` their values to that service over ordinary HTTPS; the teacher's browser polls the same service for new submissions and the live student count. No WebRTC, no peer‑to‑peer, no STUN/TURN, no signaling — just standard, filterable web traffic to one host. See [DEPLOY.md](DEPLOY.md) for the full architecture and endpoints.
+- **Ephemeral, privacy by design.** Each 4‑char room is one [Durable Object](worker/room.js) that holds the live config, buffers submissions, enforces one response per student, and **auto‑expires** a few hours after the last activity. No accounts, no logins, no student PII — only survey values and the config, kept only until the room expires.
 - **Trustworthy math.** Standard deviation is the sample statistic (divides by *n − 1*). Quartiles use the Moore & McCabe "median of halves" method taught in intro/AP statistics, and the box plot is drawn from those same numbers so the chart and the summary panel always agree.
-- **Resilient.** If a school network blocks WebRTC, the teacher can still run the lesson with manual and bulk data entry.
+- **Resilient.** Manual and bulk data entry work regardless of the network, so a lesson can always proceed.
 
 ## Tech
 
-Plain HTML/CSS/JavaScript — no build step. Loaded from CDNs:
+Frontend: plain HTML/CSS/JavaScript, no build step, loaded from CDNs:
 
 - [Tailwind CSS](https://tailwindcss.com/) — styling
-- [Trystero](https://github.com/dmotz/trystero) `0.25.4` — WebRTC peer matchmaking over three discovery networks at once: MQTT brokers, Nostr relays, and BitTorrent trackers (+ a free TURN relay for locked‑down networks). Loaded as the split `@trystero-p2p/*` packages — the old `trystero/mqtt` subpaths are deprecated and throw on import.
 - [Plotly.js](https://plotly.com/javascript/) `2.29.0` — charts
+
+Backend: a [Cloudflare Worker + SQLite‑backed Durable Object](worker/) (`wrangler`), co‑hosting the static app and the `/api` on one origin. Free tier, serverless, near‑zero maintenance.
 
 ## Run it locally
 
-Because it uses WebRTC, open it over `http://` rather than `file://`:
-
 ```bash
-# from the project folder
-python -m http.server 8000
-# then visit http://localhost:8000
+npm install
+npm run dev      # wrangler dev → http://localhost:8787
 ```
+
+This serves the app **and** the API together. Full local verification steps and an API smoke test are in [DEPLOY.md](DEPLOY.md).
 
 ## Hosting
 
-StatGather is designed to be hosted for free on **GitHub Pages** — it's a single static file. This repository is published at the live link above.
+Deploy the Worker (it serves both the frontend and the backend) with `npm run deploy` — a free Cloudflare account is all that's needed. Step‑by‑step instructions, and notes on the old GitHub Pages URL, are in [DEPLOY.md](DEPLOY.md).
 
 ## Troubleshooting
 
 | Symptom | Likely cause | What to do |
 |---|---|---|
 | Student badge stuck on **Connecting…** then **Disconnected** | The session hasn't started yet, or the code is wrong | Make sure the teacher has clicked **Host a session**; re‑check the 4‑character code; click **Try again**. |
-| Student sees **"No session found for code …"** | Wrong code, or the teacher's tab was closed/refreshed (which ends the room and creates a new code) | Re‑share the current link/code from the teacher's screen. |
-| Several students can't connect at all | The network is blocking WebRTC (common on locked‑down school Wi‑Fi) | Use the teacher's **Bulk** paste or **manual add** to enter values collected another way. |
+| Student sees **"No session found for code …"** | Wrong code, or the room expired / the teacher closed the host tab | Re‑share the current link/code from the teacher's screen; the teacher may need to host again. |
+| Students can't reach the app at all | The network is blocking the app's domain, or they're offline | Confirm the app domain is allowed by the school filter (see [SCHOOL-IT-REQUEST.md](SCHOOL-IT-REQUEST.md)); otherwise use the teacher's **Bulk** paste / **manual add**. |
 | A student submitted twice | **Allow multiple submissions** was on, or they used a different browser/device | Turn the toggle off for one‑per‑student; delete extra rows with the trash icon. The one‑per‑student limit is best‑effort (it can't stop someone using a brand‑new device). |
-| Teacher's data disappeared | The teacher tab was closed or refreshed | Nothing is stored on a server by design. Export to **CSV** periodically if you want a backup. |
+| Teacher's data disappeared | The host tab was closed/refreshed, or the room expired (TTL) | Rooms are ephemeral by design. Export to **CSV** periodically if you want a backup. |
 
-**About connectivity:** StatGather uses [Trystero](https://github.com/dmotz/trystero) so peers find each other over public infrastructure — there's no single signaling domain (like the old `0.peerjs.com`) for a school firewall to block. To be resilient, the teacher and students join the room over **three discovery networks simultaneously** — MQTT brokers, Nostr relays, and BitTorrent trackers — and the connection forms over whichever one isn't blocked; the others are dropped. The actual responses still travel directly peer‑to‑peer and end‑to‑end encrypted; the relays/brokers/trackers only carry the tiny connection handshake, and nothing is stored anywhere. (To change the pool, edit `STRATEGY_URLS` in the module at the top of `index.html`.)
-
-For the peer‑to‑peer data channel itself, the app ships with a free **TURN** server ([metered.ca](https://www.metered.ca/), free tier, 20 GB/month) that relays the already‑encrypted WebRTC packets over **TCP port 443** when a firewall blocks direct/UDP connections — this is what lets it work on many locked‑down school networks. TURN stores nothing. The credentials live in the `RTC_CONFIG` block near the top of `index.html`; they're visible in the public source by design (fine for this tier) and can be regenerated in the metered dashboard if ever abused.
-
-**Connection diagnostics panel.** Both the teacher and student screens show a collapsible **Connection diagnostics** panel (bottom‑right). Without needing DevTools, it reports which discovery networks loaded, which one connected, and an independent **TURN/STUN self‑test** that proves whether the TURN relay is even reachable — which separates "discovery is blocked" from "the data channel is blocked." Its **Copy report** button yields a shareable text summary, handy for debugging a specific network. (This panel is intended for the testing/rollout phase.)
-
-Two things to know:
-
-- **If all three discovery networks are blocked**, or WebRTC is disabled entirely, no student can connect. The diagnostics panel will show every network failing to reach the teacher (and whether TURN itself is reachable). Fall back to the teacher's **Bulk** paste / **manual add**, and consider adding another Trystero strategy (e.g. `@trystero-p2p/supabase`) to `STRATEGY_URLS`.
-- **Scaling.** Trystero forms a full peer‑to‑peer mesh within a room, so a very large class (roughly 40+) makes many connections. It's fine for a normal class; if a big class sees connection trouble, use the bulk fallback.
+**About connectivity:** all traffic is ordinary HTTPS (port 443) to a single
+domain — the Worker that serves both the app and the API. That is exactly the
+kind of traffic a school content filter can categorise and allow, which is the
+whole reason the app moved off WebRTC/peer‑to‑peer. The only allowlist entry a
+school needs is that one domain (plus the CDN/font hosts the page already loads).
+See [SCHOOL-IT-REQUEST.md](SCHOOL-IT-REQUEST.md) for the request to hand to IT.
 
 ## Changelog
+
+### 2026-10-01
+
+Re‑architected the real‑time transport from **WebRTC peer‑to‑peer to a standard
+client‑server web app over HTTPS**, after the school district's IT department
+categorically rejected WebRTC/P2P on their network (uninspectable, device‑to‑device,
+third‑party infrastructure — so self‑hosting a relay would have failed too).
+
+**Changed**
+- Removed PeerJS, `window.RTC_CONFIG`, and all metered.ca/TURN/STUN/signaling code.
+- Student and teacher now talk to a single web service over ordinary HTTPS. The
+  `CONFIG` / `DATA_SUBMIT` / `ACK` message shapes and the per‑`cid` one‑response
+  dedupe are preserved, so all stats/charts/datasets/simulation/CSV UI is unchanged.
+
+**Added**
+- A [Cloudflare Worker + Durable Object backend](worker/) that co‑hosts the static
+  app and the `/api` on one origin (one filterable domain, no CORS). One Durable
+  Object per room code is the ephemeral session; rooms auto‑expire via a TTL alarm.
+  No accounts, no PII.
+- [DEPLOY.md](DEPLOY.md) — deploy/run guide and IT‑request update notes.
+
+**Fixed**
+- Teacher live poll re‑ingested every submission each tick (it never sent the
+  `since` cursor), so one student showed up as many rows. Now sends `?since=<seq>`.
 
 ### 2026-09-16
 
