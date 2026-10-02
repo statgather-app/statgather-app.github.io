@@ -929,7 +929,7 @@ const Teacher = {
     const tick = async () => {
       let r;
       try {
-        r = await api('/api/teacher/poll', { code: this.code } );
+        r = await api('/api/teacher/poll?since=' + this.sinceSeq, { code: this.code });
       } catch (e) {
         // Transient network hiccup — show "reconnecting" but keep trying.
         this.setConn('warn', 'Reconnecting…');
