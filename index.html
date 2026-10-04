@@ -206,21 +206,20 @@
 
   <!-- ───────────────────────── LAUNCH SCREEN ───────────────────────── -->
   <section id="screen-launch" class="hidden">
-    <div class="max-w-6xl mx-auto px-6 py-10 lg:py-16">
-      <header class="flex items-center gap-3 mb-14">
+    <div class="min-h-[100dvh] max-w-6xl mx-auto px-6 flex flex-col">
+      <header class="flex items-center gap-3 pt-8 pb-4">
         <div id="brandmark-l"></div>
         <span class="font-extrabold text-xl tracking-tight">StatGather</span>
       </header>
 
-      <div class="grid lg:grid-cols-[1.05fr_.95fr] gap-12 lg:gap-16 items-center">
-        <div class="rise">
+      <div class="flex-1 grid lg:grid-cols-[1.05fr_.95fr] gap-12 lg:gap-16 items-center py-10">
+        <div class="rise min-w-0">
           <h1 class="text-4xl lg:text-[3.15rem] font-extrabold tracking-tight leading-[1.05] text-balance">
             The whole class's data, live at the front of the room.
           </h1>
-          <p class="text-ink2 text-lg mt-5 max-w-[54ch] leading-relaxed">
-            Students submit from their laptops over ordinary HTTPS. StatGather computes the
-            summary statistics and draws the distribution as the numbers arrive — no spreadsheet,
-            no accounts, nothing stored beyond the session.
+          <p class="text-ink2 text-lg mt-5 max-w-[46ch] leading-relaxed">
+            Students submit from their laptops. StatGather computes the summary statistics
+            and draws the distribution live, as each response arrives.
           </p>
 
           <ul class="flex flex-wrap gap-x-6 gap-y-2 mt-6 text-sm font-semibold text-ink2">
@@ -247,14 +246,15 @@
         </div>
 
         <!-- Live preview instrument — proves the tool at a glance, not a decorative card -->
-        <div class="rise" style="animation-delay:.08s">
-          <div class="bg-surface border border-line rounded-xl2 shadow-lift p-6">
-            <div class="flex items-center justify-between mb-5">
+        <div class="rise min-w-0" style="animation-delay:.08s">
+          <div class="bg-surface border border-line rounded-xl2 shadow-lift p-6 w-full">
+            <div class="flex items-center justify-between gap-3 mb-1">
               <span class="text-xs font-semibold uppercase tracking-[.14em] text-ink2">Sample readout</span>
-              <span class="chip bg-oksoft text-okd"><span class="w-1.5 h-1.5 rounded-full bg-ok"></span>24 connected</span>
+              <span class="chip bg-oksoft text-okd shrink-0"><span class="w-1.5 h-1.5 rounded-full bg-ok live-dot"></span>24 connected</span>
             </div>
-            <div id="preview-plot" style="height:170px;margin:-6px -6px 4px"></div>
-            <div class="grid grid-cols-4 gap-px bg-line rounded-lg overflow-hidden mt-2">
+            <p class="text-sm font-semibold text-ink mb-4">Height in inches <span class="text-ink3 font-normal mono">· n = 24</span></p>
+            <div id="preview-plot" style="height:168px;margin:0 -2px 4px"></div>
+            <div class="grid grid-cols-4 gap-px bg-line rounded-lg overflow-hidden mt-3">
               <div class="bg-surface p-3"><div class="text-[.65rem] uppercase tracking-wider text-ink2 font-semibold">Mean</div><div class="mono text-lg font-bold mt-.5">64.9</div></div>
               <div class="bg-surface p-3"><div class="text-[.65rem] uppercase tracking-wider text-ink2 font-semibold">Median</div><div class="mono text-lg font-bold mt-.5">65.0</div></div>
               <div class="bg-surface p-3"><div class="text-[.65rem] uppercase tracking-wider text-ink2 font-semibold">s</div><div class="mono text-lg font-bold mt-.5">3.4</div></div>
@@ -2122,9 +2122,6 @@ function boot() {
   ['l', 't', 's'].forEach(k => { const el = $('#brandmark-' + k); if (el) brandmark(el); });
   paintIcons();
 
-  // Draw the launch-screen preview instrument.
-  drawPreview();
-
   const params = new URLSearchParams(location.search);
   const room = params.get('room');
   if (room) {
@@ -2132,6 +2129,10 @@ function boot() {
     Student.enter(Student.cleanCode(room));
   } else {
     show('launch');
+    // Draw the preview AFTER the launch screen is visible and laid out — drawing it
+    // while the section is still display:none gives Plotly a 0-width container and it
+    // falls back to a wide default that overflows the card.
+    requestAnimationFrame(drawPreview);
   }
 
   // Launch screen actions
@@ -2149,16 +2150,26 @@ function drawPreview() {
   const el = $('#preview-plot'); if (!el || !window.Plotly) return;
   // Illustrative sample (labelled as a sample in the UI): heights ~ N(65,3.4)
   const sample = [58,60,61,62,62,63,63,64,64,64,65,65,65,65,66,66,66,67,67,68,68,69,70,72];
+  // Pin the plot to the card's measured width. Plotly's autosize measures the
+  // container asynchronously and, at some breakpoints, latches a stale/too-wide
+  // value that spills the bars past the card — an explicit width is deterministic.
+  const widthOf = () => el.clientWidth || el.parentElement.clientWidth || 360;
   Plotly.newPlot(el, [{
     type: 'histogram', x: sample, xbins: { size: 2 },
     marker: { color: CSSVAR('--accent'), opacity: .92, line: { color: '#fff', width: 1.5 } },
     hoverinfo: 'skip',
   }], {
     paper_bgcolor: 'rgba(0,0,0,0)', plot_bgcolor: 'rgba(0,0,0,0)', bargap: .05,
-    margin: { l: 8, r: 8, t: 6, b: 20 },
+    width: widthOf(), height: 168, margin: { l: 8, r: 8, t: 6, b: 20 },
     xaxis: { showgrid: false, zeroline: false, tickfont: { family: '"JetBrains Mono", monospace', size: 10, color: CSSVAR('--ink3') }, fixedrange: true },
     yaxis: { visible: false, fixedrange: true },
   }, { displayModeBar: false, staticPlot: true });
+
+  // Keep that width in sync with the card at every breakpoint.
+  const fit = () => { if (el.offsetParent !== null) Plotly.relayout(el, { width: widthOf() }); };
+  requestAnimationFrame(fit);
+  if (document.fonts && document.fonts.ready) document.fonts.ready.then(fit);
+  window.addEventListener('resize', fit);
 }
 
 if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot); else boot();
