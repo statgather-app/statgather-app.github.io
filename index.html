@@ -3,11 +3,11 @@
      THESIS: A live classroom statistics INSTRUMENT, not a SaaS card-grid. The
        class's distribution assembles at the front of the room in real time.
        Refuses the same-size card page scaffold and the big-number hero template.
-     OWN-WORLD: Projector-legible light UI on a cool blue-white ground; deep navy
-       ink, one confident blue (#1668E3) carrying all interactive meaning; white
-       measurement panels with hairline cool borders; Hanken Grotesk voice,
+     OWN-WORLD: GitHub-dark UI on a near-black canvas (#0d1117); bright ink,
+       one confident blue (#2F81F7) carrying all interactive meaning; elevated
+       #161b22 measurement panels with hairline borders; Hanken Grotesk voice,
        JetBrains Mono for every measured value; a colorblind-separated categorical
-       chart palette. "Precise instrument", not gamified.
+       chart palette brightened for the dark ground. "Precise instrument", not gamified.
      STORY: Teacher opens a room, projects it, shares a link; students on laptops
        submit; the summary console + chart update live; teacher cleans outliers,
        exports CSV.
@@ -49,35 +49,35 @@
     theme: {
       extend: {
         colors: {
-          bg:        '#eef3fa', // cool blue-white room ground
-          surface:   '#ffffff',
-          panel:     '#f7fafd',
-          line:      '#dbe6f2', // hairline cool border
-          line2:     '#c7d6e8',
-          ink:       '#0a1f3c', // deep navy primary text
-          ink2:      '#3d557a', // tinted secondary text (never gray) — 7.5:1 on white
-          ink3:      '#4f6488', // tertiary / placeholder — kept ≥4.5:1 on white & panel
-          accent:    '#1668e3', // the one confident blue
-          accentdk:  '#0a3d91', // royal, for active/emphasis
-          accentsoft:'#e4eefc',
-          ok:        '#0f9d74', // saturated — dots, icons, fills
-          okd:       '#0a7557', // darker — text on the soft fill (≥4.5:1)
-          oksoft:    '#e0f5ee',
-          bad:       '#e5484d',
-          badd:      '#b3252a',
-          badsoft:   '#fdeaea',
-          warn:      '#c77d16',
-          warnd:     '#8a5610',
-          warnsoft:  '#fbf0dc',
+          bg:        '#0d1117', // GitHub-dark canvas
+          surface:   '#161b22', // elevated card surface
+          panel:     '#1c2128', // subtle inset (table header, nested panel)
+          line:      '#30363d', // hairline border
+          line2:     '#424a53', // stronger border / grid gap-fill
+          ink:       '#e6edf3', // primary text
+          ink2:      '#adb7c2', // secondary text (labels) — 8.5:1 on surface
+          ink3:      '#8b949e', // tertiary / placeholder — ≥4.5:1 on every surface
+          accent:    '#2f81f7', // the one confident blue
+          accentdk:  '#58a6ff', // brighter blue for emphasis on dark
+          accentsoft:'#10243e',
+          ok:        '#3fb950', // saturated — dots, icons, fills
+          okd:       '#56d364', // brighter — text on the soft fill (≥4.5:1)
+          oksoft:    '#10251b',
+          bad:       '#f85149',
+          badd:      '#ff7b72', // lighter — text on dark
+          badsoft:   '#2b1416',
+          warn:      '#d29922',
+          warnd:     '#e3b341', // lighter — text on dark
+          warnsoft:  '#271a06',
         },
         fontFamily: {
           sans: ['"Hanken Grotesk"', 'system-ui', '-apple-system', 'Segoe UI', 'sans-serif'],
           mono: ['"JetBrains Mono"', 'ui-monospace', 'SFMono-Regular', 'Menlo', 'monospace'],
         },
         boxShadow: {
-          panel: '0 1px 2px rgba(10,31,60,.04), 0 8px 24px -12px rgba(10,31,60,.14)',
-          lift:  '0 4px 12px rgba(10,31,60,.06), 0 24px 48px -20px rgba(10,31,60,.24)',
-          focus: '0 0 0 4px rgba(22,104,227,.18)',
+          panel: '0 1px 0 rgba(1,4,9,.3), 0 8px 24px -12px rgba(1,4,9,.7)',
+          lift:  '0 4px 12px rgba(1,4,9,.5), 0 24px 48px -20px rgba(1,4,9,.9)',
+          focus: '0 0 0 4px rgba(47,129,247,.3)',
         },
         borderRadius: { xl2: '14px' },
       },
@@ -88,19 +88,19 @@
 <style>
   /* Palette mirrored as CSS variables so Plotly (JS) draws from the same source. */
   :root {
-    --bg:#eef3fa; --surface:#ffffff; --panel:#f7fafd; --line:#dbe6f2; --line2:#c7d6e8;
-    --ink:#0a1f3c; --ink2:#3d557a; --ink3:#4f6488;
-    --accent:#1668e3; --accentdk:#0a3d91; --ok:#0f9d74; --bad:#e5484d; --warn:#c77d16;
-    /* Categorical chart palette — ordered for maximum separation, colorblind-aware. */
-    --c0:#1668e3; --c1:#0f9d74; --c2:#c77d16; --c3:#7c5cfc;
-    --c4:#e5484d; --c5:#0ea5c4; --c6:#b0227f; --c7:#5c7a1e;
+    --bg:#0d1117; --surface:#161b22; --panel:#1c2128; --line:#30363d; --line2:#424a53;
+    --ink:#e6edf3; --ink2:#adb7c2; --ink3:#8b949e;
+    --accent:#2f81f7; --accentdk:#58a6ff; --ok:#3fb950; --bad:#f85149; --warn:#d29922;
+    /* Categorical chart palette — bright hues separated for dark, colorblind-aware. */
+    --c0:#58a6ff; --c1:#3fb950; --c2:#ffa657; --c3:#bc8cff;
+    --c4:#ff7b72; --c5:#39c5cf; --c6:#f778ba; --c7:#e3b341;
   }
 
   html { -webkit-text-size-adjust: 100%; }
   body {
     background:
-      radial-gradient(1200px 600px at 85% -8%, #f4f8fe 0%, rgba(244,248,254,0) 60%),
-      radial-gradient(900px 500px at -5% 108%, #eaf1fb 0%, rgba(234,241,251,0) 55%),
+      radial-gradient(1200px 600px at 85% -8%, #161d2b 0%, rgba(22,29,43,0) 60%),
+      radial-gradient(900px 500px at -5% 108%, #101a2e 0%, rgba(16,26,46,0) 55%),
       var(--bg);
     color: var(--ink);
     font-family: "Hanken Grotesk", system-ui, sans-serif;
@@ -110,11 +110,11 @@
   }
 
   /* Browser surfaces themed from the palette — not left at defaults. */
-  ::selection { background: rgba(22,104,227,.20); color: var(--ink); }
+  ::selection { background: rgba(47,129,247,.35); color: var(--ink); }
   * { scrollbar-width: thin; scrollbar-color: var(--line2) transparent; }
   ::-webkit-scrollbar { width: 11px; height: 11px; }
   ::-webkit-scrollbar-thumb { background: var(--line2); border-radius: 99px; border: 3px solid transparent; background-clip: content-box; }
-  ::-webkit-scrollbar-thumb:hover { background: #a9bdd6; background-clip: content-box; }
+  ::-webkit-scrollbar-thumb:hover { background: #545d68; background-clip: content-box; }
   :focus-visible { outline: none; box-shadow: 0 0 0 3px var(--surface), 0 0 0 5px var(--accent); border-radius: 8px; }
   /* Solid two-layer ring (surface gap + accent) so the focus indicator clears 3:1. */
   input:focus-visible, select:focus-visible, textarea:focus-visible { box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px var(--accent); }
@@ -126,7 +126,7 @@
   @keyframes rise { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
   .rise { animation: rise .5s cubic-bezier(.16,1,.3,1) both; }
   @keyframes pop { 0% { transform: scale(.96); } 60% { transform: scale(1.015); } 100% { transform: scale(1); } }
-  @keyframes pulse-ring { 0% { box-shadow: 0 0 0 0 rgba(15,157,116,.5); } 70% { box-shadow: 0 0 0 7px rgba(15,157,116,0); } 100% { box-shadow: 0 0 0 0 rgba(15,157,116,0); } }
+  @keyframes pulse-ring { 0% { box-shadow: 0 0 0 0 rgba(63,185,80,.55); } 70% { box-shadow: 0 0 0 7px rgba(63,185,80,0); } 100% { box-shadow: 0 0 0 0 rgba(63,185,80,0); } }
   .live-dot { animation: pulse-ring 2.2s cubic-bezier(.16,1,.3,1) infinite; }
   @keyframes row-in { from { opacity: 0; transform: translateX(-6px); } to { opacity: 1; transform: none; } }
   .row-in { animation: row-in .32s cubic-bezier(.16,1,.3,1) both; }
@@ -145,26 +145,26 @@
   .lbl { display: block; font-size: .8rem; font-weight: 600; color: var(--ink2); margin-bottom: .35rem; }
   /* Dataset workspace tabs */
   .ds-tab { display: inline-flex; align-items: center; gap: .1rem; border: 1px solid var(--line2); border-radius: 999px; background: var(--surface); overflow: hidden; }
-  .ds-tab.is-active { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(22,104,227,.18); }
+  .ds-tab.is-active { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(47,129,247,.3); }
   .ds-pick { display: inline-flex; align-items: center; gap: .4rem; padding: .3rem .75rem; font-size: .82rem; font-weight: 600; color: var(--ink); max-width: 15rem; }
   .ds-tab.is-active .ds-pick { color: var(--accentdk); }
   .ds-pick .ds-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 10rem; }
   .ds-mini { padding: .3rem .4rem; color: var(--ink3); display: inline-flex; }
-  .ds-mini:hover { color: var(--accentdk); background: var(--accentsoft, #e4eefc); }
+  .ds-mini:hover { color: var(--accentdk); background: var(--accentsoft, #10243e); }
   .ds-mini.ds-del:hover { color: var(--bad); background: var(--badsoft); }
-  .field:hover { border-color: #b4c8e0; }
-  .field:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(22,104,227,.28); }
-  select.field { appearance: none; background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%233d557a' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E"); background-repeat: no-repeat; background-position: right .7rem center; padding-right: 2.1rem; }
+  .field:hover { border-color: #484f58; }
+  .field:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(47,129,247,.4); }
+  select.field { appearance: none; background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23adb7c2' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E"); background-repeat: no-repeat; background-position: right .7rem center; padding-right: 2.1rem; }
 
   .btn { display: inline-flex; align-items: center; justify-content: center; gap: .5rem; font-weight: 600; border-radius: 10px; transition: transform .12s cubic-bezier(.16,1,.3,1), background .15s ease, box-shadow .15s ease, border-color .15s ease, color .15s ease; cursor: pointer; white-space: nowrap; }
   .btn:active { transform: translateY(1px) scale(.99); }
   .btn:disabled { opacity: .5; cursor: not-allowed; transform: none; }
-  .btn-primary { background: var(--accent); color: #fff; box-shadow: 0 6px 16px -6px rgba(22,104,227,.6); }
-  .btn-primary:hover:not(:disabled) { background: #1259c9; box-shadow: 0 8px 20px -6px rgba(22,104,227,.7); }
+  .btn-primary { background: #1f6feb; color: #fff; box-shadow: 0 6px 16px -8px rgba(31,111,235,.8); }
+  .btn-primary:hover:not(:disabled) { background: #388bfd; box-shadow: 0 8px 20px -8px rgba(56,139,253,.9); }
   .btn-ghost { background: var(--surface); color: var(--ink); border: 1px solid var(--line2); }
-  .btn-ghost:hover:not(:disabled) { border-color: #a9c1e2; background: #fbfdff; }
-  .btn-soft { background: var(--accentsoft, #e4eefc); color: var(--accentdk); }
-  .btn-soft:hover:not(:disabled) { background: #d6e6fb; }
+  .btn-ghost:hover:not(:disabled) { border-color: #6b7580; background: #1c2128; }
+  .btn-soft { background: var(--accentsoft, #10243e); color: var(--accentdk); }
+  .btn-soft:hover:not(:disabled) { background: #163354; }
 
   .chip { display: inline-flex; align-items: center; gap: .4rem; font-size: .78rem; font-weight: 600; padding: .28rem .6rem; border-radius: 99px; letter-spacing: .01em; }
 
@@ -180,7 +180,7 @@
   table.dt th { position: sticky; top: 0; background: var(--panel); text-align: left; font-weight: 600; color: var(--ink2); font-size: .74rem; letter-spacing: .06em; text-transform: uppercase; padding: .55rem .7rem; border-bottom: 1px solid var(--line); z-index: 1; }
   table.dt td { padding: .5rem .7rem; border-bottom: 1px solid var(--line); }
   table.dt tr:last-child td { border-bottom: none; }
-  table.dt tbody tr:hover { background: #f4f8fe; }
+  table.dt tbody tr:hover { background: #1c2128; }
 
   .del-btn { color: var(--ink3); border-radius: 7px; padding: .28rem; transition: color .14s ease, background .14s ease; }
   .del-btn:hover { color: var(--bad); background: var(--badsoft); }
@@ -192,7 +192,7 @@
   .stemleaf .sl-bar { background: var(--line2); align-self: stretch; }
   .stemleaf .sl-leaves { color: var(--ink); letter-spacing: .12em; word-break: break-all; }
 
-  .modal-back { background: rgba(10,31,60,.42); backdrop-filter: blur(3px); }
+  .modal-back { background: rgba(1,4,9,.7); backdrop-filter: blur(3px); }
 
   /* Plotly: strip its default UI chrome so charts read as part of the console */
   .js-plotly-plot .plotly .modebar { opacity: 0; transition: opacity .2s ease; }
@@ -214,19 +214,13 @@
 
       <div class="flex-1 grid lg:grid-cols-[1.05fr_.95fr] gap-12 lg:gap-16 items-center py-10">
         <div class="rise min-w-0">
-          <h1 class="text-4xl lg:text-[3.15rem] font-extrabold tracking-tight leading-[1.05] text-balance">
-            The whole class's data, live at the front of the room.
+          <h1 class="text-4xl lg:text-5xl font-extrabold tracking-tight leading-[1.08] text-balance">
+            Live classroom statistics
           </h1>
-          <p class="text-ink2 text-lg mt-5 max-w-[46ch] leading-relaxed">
+          <p class="text-ink2 text-lg mt-4 max-w-[48ch] leading-relaxed">
             Students submit from their laptops. StatGather computes the summary statistics
-            and draws the distribution live, as each response arrives.
+            and draws the distribution live, as each response arrives — no accounts, free to host.
           </p>
-
-          <ul class="flex flex-wrap gap-x-6 gap-y-2 mt-6 text-sm font-semibold text-ink2">
-            <li class="flex items-center gap-2"><span class="text-accent"><span class="icon" data-icon="check"></span></span>Works on school networks</li>
-            <li class="flex items-center gap-2"><span class="text-accent"><span class="icon" data-icon="check"></span></span>No accounts</li>
-            <li class="flex items-center gap-2"><span class="text-accent"><span class="icon" data-icon="check"></span></span>Free to host</li>
-          </ul>
 
           <div class="mt-8 flex flex-col sm:flex-row gap-4">
             <button id="go-teacher" class="btn btn-primary text-base px-6 py-3.5">
@@ -702,10 +696,10 @@ function paintIcons(root = document) {
 /* Brandmark: a small distribution glyph — bars rising to a peak (the app's job). */
 function brandmark(el) {
   el.innerHTML = `<svg width="30" height="30" viewBox="0 0 32 32" fill="none" aria-hidden="true">
-    <rect x="2" y="20" width="5" height="10" rx="1.5" fill="#1668e3" opacity=".45"/>
-    <rect x="9" y="13" width="5" height="17" rx="1.5" fill="#1668e3" opacity=".7"/>
-    <rect x="16" y="7" width="5" height="23" rx="1.5" fill="#1668e3"/>
-    <rect x="23" y="15" width="5" height="15" rx="1.5" fill="#0a3d91" opacity=".8"/>
+    <rect x="2" y="20" width="5" height="10" rx="1.5" fill="#58a6ff" opacity=".45"/>
+    <rect x="9" y="13" width="5" height="17" rx="1.5" fill="#58a6ff" opacity=".7"/>
+    <rect x="16" y="7" width="5" height="23" rx="1.5" fill="#58a6ff"/>
+    <rect x="23" y="15" width="5" height="15" rx="1.5" fill="#2f81f7" opacity=".85"/>
   </svg>`;
 }
 
@@ -1043,7 +1037,7 @@ const Teacher = {
 
   /* ---- connection status chip ---- */
   setConn(state, text) {
-    const dot = $('#t-conn-dot'), map = { starting: '#6a80a3', ok: '#0f9d74', warn: '#c77d16', bad: '#e5484d' };
+    const dot = $('#t-conn-dot'), map = { starting: '#8b949e', ok: '#3fb950', warn: '#d29922', bad: '#f85149' };
     dot.style.background = map[state] || map.starting;
     dot.classList.toggle('live-dot', state === 'ok');
     $('#t-conn-text').textContent = text;
@@ -1320,7 +1314,7 @@ const Teacher = {
       margin: { l: 54, r: 24, t: 20, b: 46 },
       xaxis: { gridcolor: CSSVAR('--line'), zerolinecolor: CSSVAR('--line2'), linecolor: CSSVAR('--line2'), tickfont: { family: '"JetBrains Mono", monospace' }, automargin: true },
       yaxis: { gridcolor: CSSVAR('--line'), zerolinecolor: CSSVAR('--line2'), linecolor: CSSVAR('--line2'), tickfont: { family: '"JetBrains Mono", monospace' }, automargin: true },
-      showlegend: false, hoverlabel: { bgcolor: '#0a1f3c', bordercolor: '#0a1f3c', font: { family: '"JetBrains Mono", monospace', color: '#fff' } },
+      showlegend: false, hoverlabel: { bgcolor: '#1c2128', bordercolor: '#424a53', font: { family: '"JetBrains Mono", monospace', color: '#e6edf3' } },
     }, extra);
   },
   cfg: { displaylogo: false, responsive: true, modeBarButtonsToRemove: ['select2d', 'lasso2d', 'autoScale2d', 'toggleSpikelines'] },
@@ -1337,7 +1331,7 @@ const Teacher = {
       boxpoints: 'suspectedoutliers', jitter: 0.4, pointpos: 0, width: 0.55,
       marker: { color: CSSVAR('--bad'), size: 6, outliercolor: CSSVAR('--bad'), line: { outliercolor: CSSVAR('--bad'), outlierwidth: 1.5 } },
       line: { color: CSSVAR('--accentdk'), width: 2 },
-      fillcolor: 'rgba(22,104,227,.16)',
+      fillcolor: 'rgba(47,129,247,.22)',
       hovertemplate: '%{x}<extra></extra>',
     };
     Plotly.react($('#chart'), [trace], this.baseLayout({
@@ -1360,7 +1354,7 @@ const Teacher = {
     const trace = {
       type: 'histogram', x: xs,
       xbins: { start, end: s.max + this.binWidth, size: this.binWidth },
-      marker: { color: CSSVAR('--accent'), opacity: .9, line: { color: '#fff', width: 1.5 } },
+      marker: { color: CSSVAR('--accent'), opacity: .9, line: { color: CSSVAR('--surface'), width: 1.5 } },
       hovertemplate: '%{x}: %{y}<extra></extra>',
     };
     Plotly.react($('#chart'), [trace], this.baseLayout({
@@ -1384,7 +1378,7 @@ const Teacher = {
     });
     const trace = {
       type: 'scatter', mode: 'markers', x: plotX, y: stackY,
-      marker: { color: CSSVAR('--accent'), size: 13, line: { color: '#fff', width: 1.5 }, opacity: .92 },
+      marker: { color: CSSVAR('--accent'), size: 13, line: { color: CSSVAR('--surface'), width: 1.5 }, opacity: .92 },
       hovertemplate: '%{x}<extra></extra>',
     };
     const maxStack = Math.max(1, ...stackY);
@@ -1398,7 +1392,7 @@ const Teacher = {
     const f = this.freq();
     const trace = {
       type: 'bar', x: f.map(d => d[0]), y: f.map(d => d[1]),
-      marker: { color: f.map((_, i) => CSSVAR('--c' + (i % 8))), line: { color: '#fff', width: 1 } },
+      marker: { color: f.map((_, i) => CSSVAR('--c' + (i % 8))), line: { color: CSSVAR('--surface'), width: 1 } },
       hovertemplate: '%{x}: %{y}<extra></extra>',
     };
     Plotly.react($('#chart'), [trace], this.baseLayout({
@@ -1411,7 +1405,7 @@ const Teacher = {
     const f = this.freq();
     const trace = {
       type: 'pie', labels: f.map(d => d[0]), values: f.map(d => d[1]),
-      marker: { colors: f.map((_, i) => CSSVAR('--c' + (i % 8))), line: { color: '#fff', width: 2 } },
+      marker: { colors: f.map((_, i) => CSSVAR('--c' + (i % 8))), line: { color: CSSVAR('--surface'), width: 2 } },
       textfont: { family: '"Hanken Grotesk", sans-serif', size: 14 },
       hole: .45, sort: false, direction: 'clockwise',
       hovertemplate: '%{label}: %{value} (%{percent})<extra></extra>',
@@ -1927,7 +1921,7 @@ const Student = {
   cleanCode(v) { return String(v).toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 4); },
 
   setBadge(state, text) {
-    const dot = $('#s-badge-dot'), badge = $('#s-badge'), map = { connecting: ['#c77d16', 'bg-warnsoft', 'text-warnd'], ok: ['#0f9d74', 'bg-oksoft', 'text-okd'], bad: ['#e5484d', 'bg-badsoft', 'text-badd'] };
+    const dot = $('#s-badge-dot'), badge = $('#s-badge'), map = { connecting: ['#d29922', 'bg-warnsoft', 'text-warnd'], ok: ['#3fb950', 'bg-oksoft', 'text-okd'], bad: ['#f85149', 'bg-badsoft', 'text-badd'] };
     const [c, bg, tc] = map[state] || map.connecting;
     dot.style.background = c;
     dot.classList.toggle('live-dot', state === 'ok');
@@ -2156,7 +2150,7 @@ function drawPreview() {
   const widthOf = () => el.clientWidth || el.parentElement.clientWidth || 360;
   Plotly.newPlot(el, [{
     type: 'histogram', x: sample, xbins: { size: 2 },
-    marker: { color: CSSVAR('--accent'), opacity: .92, line: { color: '#fff', width: 1.5 } },
+    marker: { color: CSSVAR('--accent'), opacity: .92, line: { color: CSSVAR('--surface'), width: 1.5 } },
     hoverinfo: 'skip',
   }], {
     paper_bgcolor: 'rgba(0,0,0,0)', plot_bgcolor: 'rgba(0,0,0,0)', bargap: .05,
