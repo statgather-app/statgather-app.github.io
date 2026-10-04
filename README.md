@@ -6,7 +6,7 @@ StatGather is a web app for teaching statistics. The teacher opens a session on 
 
 No accounts. No spreadsheet. No peer‑to‑peer. All traffic goes to a single, filterable HTTPS domain — see [DEPLOY.md](DEPLOY.md) for the backend and how to deploy it.
 
-**Live app:** <https://statgather-app.github.io/>
+**Live app:** <https://statgather.statroom.workers.dev>
 
 ---
 
@@ -41,7 +41,7 @@ No accounts. No spreadsheet. No peer‑to‑peer. All traffic goes to a single, 
 
 ### Quick start (about 30 seconds)
 
-1. The **teacher** opens the [live app](https://statgather-app.github.io/) and clicks **Host a session**.
+1. The **teacher** opens the [live app](https://statgather.statroom.workers.dev) and clicks **Host a session**.
 2. The teacher types the question (e.g. *"Height in inches"*) and picks a data type.
 3. The teacher clicks **Copy link** and shares it (post it in your LMS, chat, or write the code on the board).
 4. **Students** open the link on their laptops — they connect automatically, type their answer, and hit **Submit**.
@@ -86,7 +86,7 @@ Open the app and click **Host a session**. A room is created instantly and you'l
 
 **9. Fallback if the network blocks connections.** If students can't connect (see *Troubleshooting*), click **Bulk** and paste a batch of values separated by commas, spaces, or new lines — collect them however you can (hands up, a shared doc, verbally) and paste them in.
 
-> **Keep the tab open.** The whole session lives in your browser tab. If you close or refresh it, the room and its data are gone. There's nothing on a server to recover.
+> **Keep the host tab open.** Your running view of the session lives in the teacher's tab, and there's no "resume" — if you close or refresh it you can't rejoin that room (you'd start a new one), so **export to CSV** if you want to keep the data. The server holds only the raw values for the session and auto‑expires the room after a few hours of inactivity; no student names or accounts are stored.
 
 ### For the student (joining a session)
 
