@@ -6,7 +6,7 @@ StatGather is a web app for teaching statistics. The teacher opens a session on 
 
 No accounts. No spreadsheet. No peer‑to‑peer. All traffic goes to a single, filterable HTTPS domain — see [DEPLOY.md](DEPLOY.md) for the backend and how to deploy it.
 
-**Live app:** https://statgather-app.github.io/
+**Live app:** <https://statgather-app.github.io/>
 
 ---
 
