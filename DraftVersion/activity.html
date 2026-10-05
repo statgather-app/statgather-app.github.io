@@ -1,0 +1,365 @@
+<!doctype html>
+<!-- ============================================================================
+     StatGather — CODING ACTIVITY (scaffold to fill in)
+
+     HOW TO USE THIS FILE
+     - The whole app is broken into numbered sections (1, 2, 3, ...) with small
+       sub-steps (2.1, 2.2, ...). Each section starts with a comment block that
+       says what the section is for and roughly what code to write there.
+     - Write your code directly under each comment block.
+     - "solution.html" is the finished, working version with the SAME section
+       numbers and no explanations. If you get stuck, open it to that number,
+       see how it was done, then come back here. At the end, try adding your own
+       comments to the solution file to show you understand each part.
+
+     WHAT YOU ARE BUILDING
+       A live classroom stats tool. A teacher hosts a room; students join from
+       their own devices and submit a number; the teacher's screen shows the
+       summary statistics and a chart of the whole class's data, updating live.
+       The teacher and students talk directly to each other using PeerJS
+       (no server of our own). Charts are drawn with Plotly.
+
+     HOW TO RUN IT (once you've filled it in)
+       Open it through a local web server, e.g. in this folder run:
+           python -m http.server 8000
+       then visit  http://localhost:8000/activity.html  in your browser.
+       (PeerJS needs http://localhost or https, so opening the file directly
+        with a file:// path may not connect.)
+     ============================================================================ -->
+
+<!-- 1. Document setup -->
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>StatGather</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text y='14' font-size='14'>%F0%9F%93%8A</text></svg>">
+  <!-- These two libraries are loaded for you from a CDN. You don't need to edit them.
+       - PeerJS : lets the teacher and students send messages to each other directly.
+       - Plotly : draws the box plot, histogram, and dot plot. -->
+  <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+  <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+
+  <style>
+    /* 2. Styles
+       GOAL: a plain, dark, readable look (think GitHub's dark theme).
+       Keep it simple: solid dark backgrounds, 1px borders, rounded corners.
+       No gradients, no glowing text, no animation. Below is a checklist of the
+       rulesets to write. */
+
+    /* 2.1 Palette
+       Define your colors once as CSS variables on :root so you can reuse them
+       everywhere (e.g. var(--accent)). Suggested variables:
+         --bg (page), --surface (cards), --panel (tiles), --line (borders),
+         --ink / --ink2 / --ink3 (bright -> dim text), --accent (one blue),
+         --ok (a green for the "live" dot). */
+
+
+    /* 2.2 Base
+       Style the <body> (background color, text color, a system font, line-height,
+       and margin:0). Add box-sizing:border-box to *. Then a few small helper
+       classes you'll reuse: .mono (monospace font), .hidden (display:none),
+       .muted (dim text color), .small (slightly smaller text). */
+
+
+    /* 2.3 Top bar
+       The strip across the top of each screen. Use flexbox to put the wordmark on
+       the left and the meta info on the right (room code, connected count, "Room live").
+       Classes: .appbar (flex row, space-between, surface background, bottom border),
+       .brand (bold), .appbar-meta (small dim text), .live (green). */
+
+
+    /* 2.4 Cards and page layout
+       .card = a bordered, rounded, padded box on the surface color.
+       .card h2 = a small, uppercase, letter-spaced section label.
+       .card-head / .card-actions = a row to put a title and buttons on one line.
+       .session = the teacher layout: a 2-column CSS grid (collapse to 1 column
+       on narrow screens with a @media query), centered with a max-width. */
+
+
+    /* 2.5 Buttons
+       .btn = base button (padding, rounded, 1px border, panel background, pointer).
+       .btn-primary = filled with your accent color.
+       Variations: .btn-small, .btn-icon, .full (full width). */
+
+
+    /* 2.6 Form controls
+       Style <label> (small, bold, dim, block). Style input/select/textarea to be
+       full width with a dark background, border, and rounded corners; give them a
+       visible focus state (accent border). Add .toggle-row (label + checkbox on one
+       line) and .add-row (the manual-add input + "+" button side by side). */
+
+
+    /* 2.7 Responses table
+       .resp-table = full-width table with small text; style the <th> (dim, uppercase,
+       bottom border) and <td> (padding, bottom border). Also an empty-state style:
+       .empty (centered, dim), .empty-title, .empty-sub. */
+
+
+    /* 2.8 Summary tiles
+       .stat-row = a grid of 5 equal columns. .stat = a small bordered tile.
+       .stat-label = tiny uppercase caption. .stat-value = the big number (bold). */
+
+
+    /* 2.9 Chart area, tabs, and stem-and-leaf
+       .chart-tabs = a row of small toggle buttons; .chart-tabs button.active uses
+       your accent color. Give #chart a fixed height (e.g. 320px) so Plotly can draw.
+       For the stem-and-leaf (plain HTML, not Plotly): .sl-row (a flex row),
+       .sl-stem (fixed width, right-aligned, a right border like a divider),
+       .sl-leaves (the digits), and .sl-key (the little "key" caption). */
+
+
+    /* 2.10 Landing and student pages
+       .landing = centered column with big padding for the first screen; style its
+       <h1> and <p>, and .landing-actions (the two buttons, centered).
+       .student = a narrow centered column for the join/submit card. */
+
+  </style>
+</head>
+
+<body>
+
+  <!-- 3. Landing page
+       The first screen. Build:
+       - a wrapper  <div id="screen-landing" class="screen">
+       - a top bar (.appbar) with the "StatGather" wordmark
+       - a headline ("Live classroom statistics") and a short paragraph
+       - two buttons:  id="btn-host" (primary) and id="btn-join"
+       IMPORTANT: use these exact ids — the JavaScript finds elements by id. -->
+
+
+
+  <!-- 4. Session (host) page
+       The teacher's screen. Wrap everything in
+       <div id="screen-host" class="screen hidden">, with a top bar that also holds
+       the room code  <b id="host-code">  and connected count  <b id="host-count">.
+       Inside, a two-column layout (.session) containing four cards:
+
+       4.1 Survey config card
+           - text input   id="cfg-question"
+           - <select>     id="cfg-type"  with options "continuous" and "discrete"
+           - checkbox     id="cfg-multiple"  (allow multiple submissions)
+
+       4.2 Responses card
+           - a count span id="resp-count"
+           - buttons      id="btn-bulk"  and  id="btn-csv"
+           - manual add:  input id="manual-value"  and  button id="btn-add"
+           - a <table> whose body is  <tbody id="resp-body">
+           - an empty-state  <div id="resp-empty">
+
+       4.3 Summary card
+           - five stat tiles, each with a value element whose id is one of:
+             stat-n, stat-mean, stat-median, stat-s, stat-iqr
+
+       4.4 Distribution card
+           - tab buttons inside  <div id="chart-tabs">, each with a data-chart
+             attribute: "box", "hist", "dot", "stem"
+           - a Plotly target  <div id="chart">
+           - a stem-and-leaf target  <div id="stem-area">
+           - an empty-state  <div id="chart-empty">  -->
+
+
+
+  <!-- 5. Student page
+       Wrap in  <div id="screen-student" class="screen hidden">.
+
+       5.1 Join view  (div id="student-join")
+           - input   id="join-code"   (where they type the room code)
+           - button  id="btn-connect"
+           - status line  id="join-status"
+
+       5.2 Submit view  (div id="student-submit", start it hidden)
+           - heading  id="submit-question"  (filled in with the teacher's question)
+           - input    id="submit-value"
+           - button   id="btn-submit"
+           - status line  id="submit-status"  -->
+
+
+
+  <script>
+    // 6. Tiny helpers
+    //   - $(selector)    : return document.querySelector(selector)
+    //   - $all(selector) : return document.querySelectorAll(selector)
+    //   - show(screen)   : loop over ['landing','host','student'] and toggle the
+    //                      'hidden' class so only '#screen-<screen>' is visible.
+
+
+    // 7. Room code
+    //   - CODE_ALPHABET : a string of allowed characters. Leave out look-alikes
+    //                     (no O/0, no I/1) so codes are easy to read aloud.
+    //   - makeCode()    : build a random 4-character code from that alphabet (loop
+    //                     4 times, pick a random character each time).
+    //   - peerIdFor(code): return 'statgather-' + code. This is the PeerJS id the
+    //                      teacher registers and students connect to.
+
+
+    // 8. App state
+    //   Make ONE object called `state` that holds everything the app remembers:
+    //     role        : 'host' or 'student'
+    //     code        : the 4-character room code
+    //     peer        : the PeerJS Peer object
+    //     conns       : (host) an array of student connections
+    //     conn        : (student) the single connection to the host
+    //     responses   : an array of  { value, time }
+    //     seenIds     : new Set()  — ids we've already counted (for de-duping)
+    //     config      : { question, type, allowMultiple }
+    //     activeChart : which chart tab is showing, start it as 'box'
+
+
+    // 9. Statistics engine
+    //   Make an object `Stats` with two methods.
+    //
+    //   median(sorted): the middle value of an already-sorted array; if the length
+    //     is even, average the two middle values.
+    //
+    //   compute(values): sort a COPY of the numbers, then return an object with:
+    //     n, mean, median, sd, variance, min, max, range,
+    //     q1, q3, iqr, lowerFence, upperFence, outliers, sorted
+    //
+    //   The math (these are the intro / AP-stats conventions):
+    //     - mean = sum / n            (add them up with a loop)
+    //     - variance = (sum of (x - mean)^2) / (n - 1)   <- SAMPLE variance, n-1
+    //       sd = Math.sqrt(variance)
+    //     - quartiles by the "median of halves" method: split the sorted data at
+    //       the median; when n is odd, drop the middle value. Q1 = median of the
+    //       lower half, Q3 = median of the upper half. IQR = Q3 - Q1.
+    //     - lowerFence = Q1 - 1.5*IQR,  upperFence = Q3 + 1.5*IQR
+    //       outliers = any values below lowerFence or above upperFence.
+
+
+    // 10. Number formatting
+    //   fmt(x): return '—' if x is not a finite number. If x is a whole number,
+    //   show it with no decimals; otherwise round to at most 2 decimals.
+
+
+    // 11. Summary stats rendering
+    //   renderSummary(): take the numbers out of state.responses, run Stats.compute,
+    //   and write the results into the five tiles (#stat-n, #stat-mean, #stat-median,
+    //   #stat-s, #stat-iqr). If there are no responses yet, show '—' in each.
+
+
+    // 12. Charts
+    //   Make an object `Charts`. Plotly draws into #chart; the stem-and-leaf plot is
+    //   built as plain HTML into #stem-area.
+    //
+    //   12.1 baseLayout(extra) + cfg + axisTitle()
+    //     baseLayout returns a shared Plotly layout (transparent backgrounds, your
+    //     text color, small margins, no legend) merged with an `extra` object.
+    //     cfg is a small config object: { displaylogo:false, responsive:true }.
+    //     axisTitle() returns state.config.question (or a default like 'Value').
+    //
+    //   12.2 plotBox(xs): a horizontal Plotly 'box' trace. Use
+    //        quartilemethod:'exclusive' and boxpoints:'suspectedoutliers' so the box
+    //        and its flagged outliers match the numbers in your summary panel.
+    //
+    //   12.3 plotHist(xs): a 'histogram' trace. Choose a bin size from the data's
+    //        range (e.g. range divided by somewhere between 4 and 12 bins), and
+    //        label the y-axis "Frequency".
+    //
+    //   12.4 plotDot(xs): a 'scatter' markers trace. Sort the values; walk through
+    //        them and stack equal (or very close) values by giving each a y of
+    //        1, 2, 3, ... so every observation shows as its own dot.
+    //
+    //   12.5 renderStemLeaf(xs): round each value. stem = Math.floor(v/10) and
+    //        leaf = v - stem*10. Group the leaves by their stem, then build one row
+    //        of HTML per stem from the smallest to the largest stem (include empty
+    //        stems in between so gaps in the data are visible). Add a short "key"
+    //        line explaining that stem = tens and leaf = ones.
+    //
+    //   12.6 render(): if there is no data, show #chart-empty and stop. Otherwise
+    //        show the correct container (#chart for box/hist/dot, #stem-area for
+    //        stem) and call the matching method based on state.activeChart.
+
+
+    // 13. Responses
+    //   refreshAll(): call renderTable(), renderSummary(), and Charts.render().
+    //
+    //   13.1 pushValue(raw): parseFloat the input. If it is NOT a finite number,
+    //        return false. Otherwise push { value, time } onto state.responses
+    //        (time = new Date().toTimeString().slice(0,8) gives HH:MM:SS) and
+    //        return true. addValue(raw): call pushValue, and if it worked call
+    //        refreshAll(); return whether it worked.
+    //
+    //   13.2 renderTable(): update #resp-count, show/hide #resp-empty depending on
+    //        whether there is data, and rebuild the #resp-body rows (number, value,
+    //        time) from state.responses.
+    //
+    //   13.3 setupManualAdd(): clicking #btn-add (or pressing Enter in #manual-value)
+    //        should add the typed value and clear the input.
+    //
+    //   13.4 setupBulk(): clicking #btn-bulk should prompt the user to paste values,
+    //        split the text on spaces/commas/newlines, pushValue each one, then
+    //        refreshAll() once at the end.
+    //
+    //   13.5 exportCSV(): build a CSV string (a header line plus index,value,time
+    //        per response) and download it using a Blob and a temporary <a download>.
+
+
+    // 14. Survey config
+    //   readConfig(): copy the three inputs (#cfg-question, #cfg-type, #cfg-multiple)
+    //     into state.config.
+    //   broadcastConfig(): send { type:'CONFIG', config: state.config } to every
+    //     open connection in state.conns (so students see the current question).
+    //   setupConfig(): whenever a config input changes, readConfig(), then
+    //     broadcastConfig(), then Charts.render() (to refresh the axis title).
+
+
+    // 15. PeerJS transport - host
+    //   startHosting(): set state.role='host', make a code, readConfig(),
+    //     show('host'), display the code as "STAT-<code>", createHostPeer(),
+    //     and refreshAll().
+    //   createHostPeer(): new Peer(peerIdFor(state.code)). Then:
+    //     - on 'connection': add the connection to state.conns; when it opens, send
+    //       the CONFIG and update the connected count; on 'data' call
+    //       handleStudentMessage; on 'close' update the count.
+    //     - on 'error': if err.type is 'unavailable-id' (that code is already taken),
+    //       make a new code, update the display, and call createHostPeer() again.
+    //   updateConnectedCount(): count how many connections are open, write to
+    //     #host-count.
+    //   handleStudentMessage(conn, msg): ignore anything that isn't a 'DATA_SUBMIT'.
+    //     If msg.id is already in state.seenIds, just send an ACK again (de-dupe).
+    //     Otherwise pushValue(msg.value); if accepted, add the id to seenIds,
+    //     refreshAll(), and send { type:'ACK', id }. If not a number, send
+    //     { type:'REJECT', id }.
+
+
+    // 16. PeerJS transport - student
+    //   connectAsStudent(): read #join-code, remove a leading "STAT-", uppercase it.
+    //     If it isn't 4 characters, show a hint in #join-status and stop. Otherwise
+    //     new Peer(); on 'open', connect to peerIdFor(code); on the connection's
+    //     'data' call handleHostMessage; handle 'peer-unavailable' and other errors
+    //     by writing a message to #join-status.
+    //   handleHostMessage(msg):
+    //     - 'CONFIG' : save it into state.config and showSubmitView()
+    //     - 'ACK'    : if multiple submissions are allowed, clear the input and say
+    //                  "recorded"; otherwise disable the input/button and say thanks
+    //     - 'REJECT' : tell the student the value wasn't a number
+    //   showSubmitView(): hide #student-join, show #student-submit, and put the
+    //     question into #submit-question.
+    //   submitResponse(): read #submit-value; if empty, stop. Otherwise make a unique
+    //     id and send { type:'DATA_SUBMIT', id, value }.
+    //   makeSubmissionId(): use crypto.randomUUID() if available, else a fallback
+    //     like Date.now() + '-' + a random number.
+    //   setJoinStatus(text) / setSubmitStatus(text): tiny helpers that write into the
+    //     two status lines.
+
+
+    // 17. Chart tab switching
+    //   setupChartTabs(): for each button inside #chart-tabs, add a click handler that
+    //   marks it active (and un-marks the others), sets state.activeChart from the
+    //   button's data-chart attribute, and calls Charts.render().
+
+
+    // 18. Boot / glue
+    //   setupLanding(): wire up the buttons and Enter keys — #btn-host (startHosting),
+    //     #btn-join (show the student screen), #btn-connect (connectAsStudent),
+    //     #btn-submit (submitResponse), #btn-csv (exportCSV).
+    //   boot(): call all the setup functions (landing, manual add, bulk, config,
+    //     chart tabs). Then read the URL: if there is a ?room=CODE, show the student
+    //     screen and pre-fill the code; otherwise show('landing').
+    //   Finally: run boot() when the page is ready (DOMContentLoaded).
+
+  </script>
+
+</body>
+</html>

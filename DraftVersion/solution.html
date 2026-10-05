@@ -1,0 +1,827 @@
+<!doctype html>
+<!-- 1. Document setup -->
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>StatGather</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text y='14' font-size='14'>%F0%9F%93%8A</text></svg>">
+  <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+  <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+
+  <style>
+    /* 2. Styles */
+
+    /* 2.1 Palette */
+    :root {
+      --bg: #0d1117;
+      --surface: #161b22;
+      --panel: #1c2128;
+      --line: #30363d;
+      --ink: #e6edf3;
+      --ink2: #adb7c2;
+      --ink3: #8b949e;
+      --accent: #2f81f7;
+      --ok: #3fb950;
+    }
+
+    /* 2.2 Base */
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--ink);
+      font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+      line-height: 1.5;
+    }
+    .mono { font-family: "JetBrains Mono", ui-monospace, Consolas, monospace; }
+    .hidden { display: none; }
+    .muted { color: var(--ink2); }
+    .small { font-size: 0.8rem; }
+
+    /* 2.3 Top bar */
+    .appbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      flex-wrap: wrap;
+      padding: 12px 20px;
+      background: var(--surface);
+      border-bottom: 1px solid var(--line);
+    }
+    .brand { font-weight: 700; font-size: 1.05rem; }
+    .appbar-meta {
+      display: flex;
+      gap: 20px;
+      align-items: center;
+      font-size: 0.8rem;
+      color: var(--ink2);
+      letter-spacing: 0.04em;
+    }
+    .appbar-meta b { color: var(--ink); }
+    .live { color: var(--ok); }
+
+    /* 2.4 Cards and page layout */
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 16px;
+      margin-bottom: 16px;
+    }
+    .card h2 {
+      margin: 0 0 4px;
+      font-size: 0.75rem;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--ink2);
+    }
+    .card-head { display: flex; justify-content: space-between; align-items: center; }
+    .card-actions { display: flex; gap: 8px; }
+    .session {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+      padding: 20px;
+      max-width: 1100px;
+      margin: 0 auto;
+    }
+    @media (max-width: 800px) {
+      .session { grid-template-columns: 1fr; }
+    }
+
+    /* 2.5 Buttons */
+    .btn {
+      font: inherit;
+      padding: 8px 14px;
+      border-radius: 8px;
+      border: 1px solid var(--line);
+      background: var(--panel);
+      color: var(--ink);
+      cursor: pointer;
+    }
+    .btn:hover { border-color: var(--ink3); }
+    .btn-primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+    .btn-small { padding: 4px 10px; font-size: 0.8rem; }
+    .btn-icon { padding: 8px 12px; }
+    .full { width: 100%; margin-top: 10px; }
+
+    /* 2.6 Form controls */
+    label { display: block; margin: 12px 0 4px; font-size: 0.8rem; font-weight: 600; color: var(--ink2); }
+    input, select, textarea {
+      width: 100%;
+      font: inherit;
+      padding: 8px 10px;
+      border-radius: 8px;
+      border: 1px solid var(--line);
+      background: var(--bg);
+      color: var(--ink);
+    }
+    input:focus, select:focus { outline: none; border-color: var(--accent); }
+    .toggle-row { display: flex; align-items: center; justify-content: space-between; margin-top: 14px; }
+    .toggle-row input { width: auto; }
+    .add-row { display: flex; gap: 8px; margin: 12px 0; }
+
+    /* 2.7 Responses table */
+    .resp-table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+    .resp-table th {
+      text-align: left;
+      font-size: 0.7rem;
+      letter-spacing: 0.06em;
+      color: var(--ink3);
+      border-bottom: 1px solid var(--line);
+      padding: 6px 8px;
+    }
+    .resp-table td { padding: 6px 8px; border-bottom: 1px solid var(--line); }
+    .empty { text-align: center; padding: 24px 12px; color: var(--ink3); }
+    .empty-title { font-weight: 600; color: var(--ink2); }
+    .empty-sub { font-size: 0.8rem; margin-top: 4px; }
+
+    /* 2.8 Summary tiles */
+    .stat-row { display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; }
+    .stat { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 10px; text-align: center; }
+    .stat-label { font-size: 0.65rem; letter-spacing: 0.06em; color: var(--ink3); text-transform: uppercase; }
+    .stat-value { font-size: 1.25rem; font-weight: 700; margin-top: 2px; }
+
+    /* 2.9 Chart area, tabs, and stem-and-leaf */
+    .chart-tabs { display: flex; gap: 6px; flex-wrap: wrap; margin: 8px 0 12px; }
+    .chart-tabs button {
+      font: inherit;
+      font-size: 0.78rem;
+      padding: 4px 10px;
+      border-radius: 6px;
+      border: 1px solid var(--line);
+      background: var(--panel);
+      color: var(--ink2);
+      cursor: pointer;
+    }
+    .chart-tabs button.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+    #chart { width: 100%; height: 320px; }
+    #stem-area { font-family: "JetBrains Mono", ui-monospace, monospace; font-size: 0.9rem; }
+    .sl-key { color: var(--ink2); font-family: system-ui, sans-serif; font-size: 0.78rem; margin-bottom: 10px; }
+    .sl-row { display: flex; gap: 10px; padding: 2px 0; }
+    .sl-stem { width: 36px; text-align: right; color: var(--ink3); border-right: 1px solid var(--line); padding-right: 8px; }
+    .sl-leaves { letter-spacing: 2px; }
+
+    /* 2.10 Landing and student pages */
+    .landing { max-width: 640px; margin: 0 auto; padding: 80px 20px; text-align: center; }
+    .landing h1 { font-size: 2.4rem; margin: 0 0 16px; }
+    .landing p { color: var(--ink2); font-size: 1.05rem; }
+    .landing-actions { display: flex; gap: 12px; justify-content: center; margin-top: 28px; flex-wrap: wrap; }
+    .student { max-width: 440px; margin: 0 auto; padding: 48px 20px; }
+    .student h1 { font-size: 1.5rem; margin: 0 0 8px; }
+  </style>
+</head>
+
+<body>
+
+  <!-- 3. Landing page -->
+  <div id="screen-landing" class="screen">
+    <header class="appbar">
+      <div class="brand">&#128202; StatGather</div>
+    </header>
+    <main class="landing">
+      <h1>Live classroom statistics</h1>
+      <p>Students submit from their laptops. StatGather computes the summary statistics
+         and draws the distribution live, as each response arrives &mdash; no accounts, free to host.</p>
+      <div class="landing-actions">
+        <button id="btn-host" class="btn btn-primary">Host a new session</button>
+        <button id="btn-join" class="btn">Join as student</button>
+      </div>
+    </main>
+  </div>
+
+  <!-- 4. Session (host) page -->
+  <div id="screen-host" class="screen hidden">
+    <header class="appbar">
+      <div class="brand">&#128202; StatGather</div>
+      <div class="appbar-meta">
+        <span>ROOM CODE: <b id="host-code" class="mono">STAT-____</b></span>
+        <span>CONNECTED: <b id="host-count">0</b></span>
+        <span class="live">&#9679; Room live</span>
+      </div>
+    </header>
+    <main class="session">
+      <section class="col-left">
+
+        <!-- 4.1 Survey config card -->
+        <div class="card">
+          <h2>Survey</h2>
+          <p class="muted small">What each student sends in. Changes broadcast to everyone connected.</p>
+          <p class="muted small">Collecting into <b>Class data</b></p>
+          <label for="cfg-question">Question / Prompt</label>
+          <input id="cfg-question" type="text" value="Height in inches">
+          <label for="cfg-type">Data type</label>
+          <select id="cfg-type">
+            <option value="continuous">Numerical &mdash; continuous</option>
+            <option value="discrete">Numerical &mdash; discrete</option>
+          </select>
+          <label class="toggle-row">
+            <span>Allow multiple submissions</span>
+            <input id="cfg-multiple" type="checkbox">
+          </label>
+        </div>
+
+        <!-- 4.2 Responses card -->
+        <div class="card">
+          <div class="card-head">
+            <h2>Responses (<span id="resp-count">0</span>)</h2>
+            <div class="card-actions">
+              <button id="btn-bulk" class="btn btn-small">Bulk</button>
+              <button id="btn-csv" class="btn btn-small">CSV</button>
+            </div>
+          </div>
+          <div class="add-row">
+            <input id="manual-value" type="text" placeholder="Add a value manually...">
+            <button id="btn-add" class="btn btn-primary btn-icon">+</button>
+          </div>
+          <table class="resp-table">
+            <thead><tr><th>#</th><th>VALUE</th><th>TIME</th></tr></thead>
+            <tbody id="resp-body"></tbody>
+          </table>
+          <div id="resp-empty" class="empty">
+            <div class="empty-title">Waiting for data.</div>
+            <div class="empty-sub">Charts appear as soon as the first response arrives.
+              Share the code, add values by hand, or paste in bulk.</div>
+          </div>
+        </div>
+
+      </section>
+      <section class="col-right">
+
+        <!-- 4.3 Summary card -->
+        <div class="card">
+          <h2>Summary</h2>
+          <div class="stat-row">
+            <div class="stat"><div class="stat-label">N</div><div class="stat-value mono" id="stat-n">0</div></div>
+            <div class="stat"><div class="stat-label">Mean</div><div class="stat-value mono" id="stat-mean">&mdash;</div></div>
+            <div class="stat"><div class="stat-label">Median</div><div class="stat-value mono" id="stat-median">&mdash;</div></div>
+            <div class="stat"><div class="stat-label">s</div><div class="stat-value mono" id="stat-s">&mdash;</div></div>
+            <div class="stat"><div class="stat-label">IQR</div><div class="stat-value mono" id="stat-iqr">&mdash;</div></div>
+          </div>
+        </div>
+
+        <!-- 4.4 Distribution card -->
+        <div class="card">
+          <h2>Distribution</h2>
+          <div class="chart-tabs" id="chart-tabs">
+            <button data-chart="box" class="active">Box plot</button>
+            <button data-chart="hist">Histogram</button>
+            <button data-chart="dot">Dot plot</button>
+            <button data-chart="stem">Stem &amp; leaf</button>
+          </div>
+          <div id="chart" class="hidden"></div>
+          <div id="stem-area" class="hidden"></div>
+          <div id="chart-empty" class="empty">
+            <div class="empty-title">Waiting for data.</div>
+            <div class="empty-sub">Charts appear as soon as the first response arrives.</div>
+          </div>
+        </div>
+
+      </section>
+    </main>
+  </div>
+
+  <!-- 5. Student page -->
+  <div id="screen-student" class="screen hidden">
+    <header class="appbar">
+      <div class="brand">&#128202; StatGather</div>
+    </header>
+    <main class="student">
+      <div class="card">
+
+        <!-- 5.1 Join view -->
+        <div id="student-join">
+          <h1>Join a session</h1>
+          <p class="muted small">Enter the room code your teacher is showing.</p>
+          <label for="join-code">Room code</label>
+          <input id="join-code" type="text" class="mono" placeholder="STAT-XXXX">
+          <button id="btn-connect" class="btn btn-primary full">Connect</button>
+          <div id="join-status" class="muted small" style="margin-top:10px;"></div>
+        </div>
+
+        <!-- 5.2 Submit view -->
+        <div id="student-submit" class="hidden">
+          <h1 id="submit-question">Your response</h1>
+          <label for="submit-value">Your response</label>
+          <input id="submit-value" type="text">
+          <button id="btn-submit" class="btn btn-primary full">Submit</button>
+          <div id="submit-status" class="muted small" style="margin-top:10px;"></div>
+        </div>
+
+      </div>
+    </main>
+  </div>
+
+  <script>
+    // 6. Tiny helpers
+    function $(sel) { return document.querySelector(sel); }
+    function $all(sel) { return document.querySelectorAll(sel); }
+
+    const SCREENS = ['landing', 'host', 'student'];
+    function show(screen) {
+      for (let i = 0; i < SCREENS.length; i++) {
+        $('#screen-' + SCREENS[i]).classList.toggle('hidden', SCREENS[i] !== screen);
+      }
+      window.scrollTo(0, 0);
+    }
+
+    // 7. Room code
+    const CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+    function makeCode() {
+      let code = '';
+      for (let i = 0; i < 4; i++) {
+        code += CODE_ALPHABET.charAt(Math.floor(Math.random() * CODE_ALPHABET.length));
+      }
+      return code;
+    }
+    function peerIdFor(code) { return 'statgather-' + code; }
+
+    // 8. App state
+    const state = {
+      role: null,
+      code: null,
+      peer: null,
+      conns: [],
+      conn: null,
+      responses: [],
+      seenIds: new Set(),
+      config: { question: 'Height in inches', type: 'continuous', allowMultiple: false },
+      activeChart: 'box',
+    };
+
+    // 9. Statistics engine
+    const Stats = {
+      median: function (sorted) {
+        const n = sorted.length;
+        if (n === 0) return NaN;
+        const mid = Math.floor(n / 2);
+        if (n % 2 === 1) return sorted[mid];
+        return (sorted[mid - 1] + sorted[mid]) / 2;
+      },
+      compute: function (values) {
+        const xs = values.slice().sort(function (a, b) { return a - b; });
+        const n = xs.length;
+        if (n === 0) return { n: 0 };
+
+        let sum = 0;
+        for (let i = 0; i < n; i++) sum += xs[i];
+        const mean = sum / n;
+
+        const median = this.median(xs);
+
+        let squaredDiff = 0;
+        for (let i = 0; i < n; i++) squaredDiff += (xs[i] - mean) * (xs[i] - mean);
+        const variance = n > 1 ? squaredDiff / (n - 1) : 0;
+        const sd = Math.sqrt(variance);
+
+        const half = Math.floor(n / 2);
+        const lower = xs.slice(0, half);
+        const upper = n % 2 === 1 ? xs.slice(half + 1) : xs.slice(half);
+        const q1 = n === 1 ? xs[0] : this.median(lower);
+        const q3 = n === 1 ? xs[0] : this.median(upper);
+        const iqr = q3 - q1;
+
+        const lowerFence = q1 - 1.5 * iqr;
+        const upperFence = q3 + 1.5 * iqr;
+        const outliers = [];
+        for (let i = 0; i < n; i++) {
+          if (xs[i] < lowerFence || xs[i] > upperFence) outliers.push(xs[i]);
+        }
+
+        return {
+          n: n, mean: mean, median: median, sd: sd, variance: variance,
+          min: xs[0], max: xs[n - 1], range: xs[n - 1] - xs[0],
+          q1: q1, q3: q3, iqr: iqr,
+          lowerFence: lowerFence, upperFence: upperFence,
+          outliers: outliers, sorted: xs,
+        };
+      },
+    };
+
+    // 10. Number formatting
+    function fmt(x) {
+      if (!Number.isFinite(x)) return '—';
+      if (Math.abs(x - Math.round(x)) < 1e-9) return String(Math.round(x));
+      return String(Number(x.toFixed(2)));
+    }
+
+    // 11. Summary stats rendering
+    function renderSummary() {
+      const values = state.responses.map(function (r) { return r.value; });
+      const s = Stats.compute(values);
+      if (!s.n) {
+        $('#stat-n').textContent = '0';
+        $('#stat-mean').textContent = '—';
+        $('#stat-median').textContent = '—';
+        $('#stat-s').textContent = '—';
+        $('#stat-iqr').textContent = '—';
+        return;
+      }
+      $('#stat-n').textContent = String(s.n);
+      $('#stat-mean').textContent = fmt(s.mean);
+      $('#stat-median').textContent = fmt(s.median);
+      $('#stat-s').textContent = fmt(s.sd);
+      $('#stat-iqr').textContent = fmt(s.iqr);
+    }
+
+    // 12. Charts
+    const Charts = {
+      // 12.1 Shared layout and config
+      baseLayout: function (extra) {
+        const layout = {
+          paper_bgcolor: 'rgba(0,0,0,0)',
+          plot_bgcolor: 'rgba(0,0,0,0)',
+          font: { family: 'system-ui, sans-serif', color: '#adb7c2', size: 13 },
+          margin: { l: 50, r: 20, t: 16, b: 42 },
+          showlegend: false,
+        };
+        return Object.assign(layout, extra || {});
+      },
+      cfg: { displaylogo: false, responsive: true },
+      axisTitle: function () { return state.config.question || 'Value'; },
+
+      // 12.2 Box plot
+      plotBox: function (xs) {
+        const trace = {
+          type: 'box', x: xs, orientation: 'h',
+          quartilemethod: 'exclusive', boxmean: true,
+          boxpoints: 'suspectedoutliers', pointpos: 0, width: 0.5,
+          marker: { color: '#f85149', size: 6 },
+          line: { color: '#58a6ff', width: 2 },
+          fillcolor: 'rgba(47,129,247,0.22)',
+          hovertemplate: '%{x}<extra></extra>',
+        };
+        Plotly.react($('#chart'), [trace], this.baseLayout({
+          yaxis: { visible: false, range: [-1, 1] },
+          xaxis: { title: { text: this.axisTitle() }, gridcolor: '#30363d', zeroline: false },
+        }), this.cfg);
+      },
+
+      // 12.3 Histogram
+      plotHist: function (xs) {
+        const s = Stats.compute(xs);
+        const span = s.range || 1;
+        const bins = Math.min(12, Math.max(4, Math.ceil(Math.sqrt(s.n))));
+        const size = Math.max(1, Math.round(span / bins));
+        const start = Math.floor(s.min / size) * size;
+        const trace = {
+          type: 'histogram', x: xs,
+          xbins: { start: start, end: s.max + size, size: size },
+          marker: { color: '#2f81f7', line: { color: '#161b22', width: 1.5 } },
+          hovertemplate: '%{x}: %{y}<extra></extra>',
+        };
+        Plotly.react($('#chart'), [trace], this.baseLayout({
+          bargap: 0.04,
+          xaxis: { title: { text: this.axisTitle() } },
+          yaxis: { title: { text: 'Frequency' }, gridcolor: '#30363d', rangemode: 'tozero' },
+        }), this.cfg);
+      },
+
+      // 12.4 Dot plot
+      plotDot: function (xs) {
+        const sorted = xs.slice().sort(function (a, b) { return a - b; });
+        const s = Stats.compute(xs);
+        const span = s.range || 1;
+        const tol = span / 60;
+        const plotX = [];
+        const stackY = [];
+        const columns = [];
+        for (let i = 0; i < sorted.length; i++) {
+          const v = sorted[i];
+          let col = -1;
+          for (let c = 0; c < columns.length; c++) {
+            if (Math.abs(columns[c].v - v) <= tol) { col = c; break; }
+          }
+          if (col === -1) { columns.push({ v: v, count: 0 }); col = columns.length - 1; }
+          columns[col].count++;
+          plotX.push(v);
+          stackY.push(columns[col].count);
+        }
+        let maxStack = 1;
+        for (let i = 0; i < stackY.length; i++) if (stackY[i] > maxStack) maxStack = stackY[i];
+        const trace = {
+          type: 'scatter', mode: 'markers', x: plotX, y: stackY,
+          marker: { color: '#2f81f7', size: 13, line: { color: '#161b22', width: 1.5 } },
+          hovertemplate: '%{x}<extra></extra>',
+        };
+        Plotly.react($('#chart'), [trace], this.baseLayout({
+          xaxis: { title: { text: this.axisTitle() }, gridcolor: '#30363d', zeroline: false },
+          yaxis: { visible: false, range: [0.3, maxStack + 0.8], fixedrange: true },
+        }), this.cfg);
+      },
+
+      // 12.5 Stem-and-leaf
+      renderStemLeaf: function (xs) {
+        const rounded = xs.map(function (v) { return Math.round(v); }).sort(function (a, b) { return a - b; });
+        const groups = {};
+        for (let i = 0; i < rounded.length; i++) {
+          const v = rounded[i];
+          const stemVal = Math.floor(v / 10);
+          const leaf = v - stemVal * 10;
+          if (!groups[stemVal]) groups[stemVal] = [];
+          groups[stemVal].push(leaf);
+        }
+        const stemKeys = Object.keys(groups).map(Number).sort(function (a, b) { return a - b; });
+        const min = stemKeys[0];
+        const max = stemKeys[stemKeys.length - 1];
+        let rows = '';
+        for (let sVal = min; sVal <= max; sVal++) {
+          const leaves = groups[sVal] ? groups[sVal].slice().sort(function (a, b) { return a - b; }).join(' ') : '';
+          rows += '<div class="sl-row"><span class="sl-stem">' + sVal + '</span><span class="sl-leaves">' + leaves + '</span></div>';
+        }
+        const keyLeaf = groups[min][0];
+        $('#stem-area').innerHTML =
+          '<div class="sl-key">Stem = tens, leaf = ones. Key: ' + min + '|' + keyLeaf +
+          ' means ' + (min * 10 + keyLeaf) + '.</div>' + rows;
+      },
+
+      // 12.6 Draw the active chart (or show the empty state)
+      render: function () {
+        const values = state.responses.map(function (r) { return r.value; });
+        const hasData = values.length > 0;
+        const useStem = state.activeChart === 'stem';
+        $('#chart-empty').classList.toggle('hidden', hasData);
+        $('#chart').classList.toggle('hidden', !hasData || useStem);
+        $('#stem-area').classList.toggle('hidden', !hasData || !useStem);
+        if (!hasData) { Plotly.purge($('#chart')); return; }
+        if (state.activeChart === 'box') this.plotBox(values);
+        else if (state.activeChart === 'hist') this.plotHist(values);
+        else if (state.activeChart === 'dot') this.plotDot(values);
+        else if (state.activeChart === 'stem') this.renderStemLeaf(values);
+      },
+    };
+
+    // 13. Responses
+    function refreshAll() {
+      renderTable();
+      renderSummary();
+      Charts.render();
+    }
+
+    // 13.1 Add one value (returns true if it was a number)
+    function pushValue(raw) {
+      const num = parseFloat(raw);
+      if (!Number.isFinite(num)) return false;
+      const time = new Date().toTimeString().slice(0, 8);
+      state.responses.push({ value: num, time: time });
+      return true;
+    }
+    function addValue(raw) {
+      const ok = pushValue(raw);
+      if (ok) refreshAll();
+      return ok;
+    }
+
+    // 13.2 Draw the responses table
+    function renderTable() {
+      const body = $('#resp-body');
+      $('#resp-count').textContent = String(state.responses.length);
+      $('#resp-empty').classList.toggle('hidden', state.responses.length > 0);
+      body.innerHTML = '';
+      for (let i = 0; i < state.responses.length; i++) {
+        const r = state.responses[i];
+        const row = document.createElement('tr');
+        row.innerHTML =
+          '<td class="mono">' + (i + 1) + '</td>' +
+          '<td class="mono">' + fmt(r.value) + '</td>' +
+          '<td class="mono muted">' + r.time + '</td>';
+        body.appendChild(row);
+      }
+    }
+
+    // 13.3 Manual add wiring
+    function setupManualAdd() {
+      $('#btn-add').addEventListener('click', function () {
+        const input = $('#manual-value');
+        if (addValue(input.value)) input.value = '';
+        input.focus();
+      });
+      $('#manual-value').addEventListener('keydown', function (e) {
+        if (e.key === 'Enter') $('#btn-add').click();
+      });
+    }
+
+    // 13.4 Bulk paste
+    function setupBulk() {
+      $('#btn-bulk').addEventListener('click', function () {
+        const text = window.prompt('Paste values (separated by spaces, commas, or new lines):');
+        if (!text) return;
+        const parts = text.split(/[\s,]+/);
+        for (let i = 0; i < parts.length; i++) {
+          if (parts[i] !== '') pushValue(parts[i]);
+        }
+        refreshAll();
+      });
+    }
+
+    // 13.5 CSV export
+    function exportCSV() {
+      let csv = 'index,value,time\n';
+      for (let i = 0; i < state.responses.length; i++) {
+        const r = state.responses[i];
+        csv += (i + 1) + ',' + r.value + ',' + r.time + '\n';
+      }
+      const blob = new Blob([csv], { type: 'text/csv' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'statgather-responses.csv';
+      a.click();
+      URL.revokeObjectURL(url);
+    }
+
+    // 14. Survey config
+    function readConfig() {
+      state.config.question = $('#cfg-question').value;
+      state.config.type = $('#cfg-type').value;
+      state.config.allowMultiple = $('#cfg-multiple').checked;
+    }
+    function broadcastConfig() {
+      for (let i = 0; i < state.conns.length; i++) {
+        if (state.conns[i].open) state.conns[i].send({ type: 'CONFIG', config: state.config });
+      }
+    }
+    function setupConfig() {
+      const onChange = function () { readConfig(); broadcastConfig(); Charts.render(); };
+      $('#cfg-question').addEventListener('input', onChange);
+      $('#cfg-type').addEventListener('change', onChange);
+      $('#cfg-multiple').addEventListener('change', onChange);
+    }
+
+    // 15. PeerJS transport - host
+    function startHosting() {
+      state.role = 'host';
+      state.code = makeCode();
+      readConfig();
+      show('host');
+      $('#host-code').textContent = 'STAT-' + state.code;
+      createHostPeer();
+      refreshAll();
+    }
+
+    function createHostPeer() {
+      const peer = new Peer(peerIdFor(state.code));
+      state.peer = peer;
+
+      peer.on('connection', function (conn) {
+        state.conns.push(conn);
+        conn.on('open', function () {
+          conn.send({ type: 'CONFIG', config: state.config });
+          updateConnectedCount();
+        });
+        conn.on('data', function (msg) { handleStudentMessage(conn, msg); });
+        conn.on('close', function () { updateConnectedCount(); });
+      });
+
+      peer.on('error', function (err) {
+        if (err.type === 'unavailable-id') {
+          state.code = makeCode();
+          $('#host-code').textContent = 'STAT-' + state.code;
+          createHostPeer();
+        }
+      });
+    }
+
+    function updateConnectedCount() {
+      let live = 0;
+      for (let i = 0; i < state.conns.length; i++) {
+        if (state.conns[i].open) live++;
+      }
+      $('#host-count').textContent = String(live);
+    }
+
+    function handleStudentMessage(conn, msg) {
+      if (!msg || msg.type !== 'DATA_SUBMIT') return;
+      if (state.seenIds.has(msg.id)) {
+        conn.send({ type: 'ACK', id: msg.id });
+        return;
+      }
+      const accepted = pushValue(msg.value);
+      if (accepted) {
+        state.seenIds.add(msg.id);
+        refreshAll();
+        conn.send({ type: 'ACK', id: msg.id });
+      } else {
+        conn.send({ type: 'REJECT', id: msg.id });
+      }
+    }
+
+    // 16. PeerJS transport - student
+    function connectAsStudent() {
+      const raw = $('#join-code').value.trim().toUpperCase();
+      const code = raw.replace(/^STAT-/, '');
+      if (code.length !== 4) {
+        setJoinStatus('Enter the 4-character code (for example STAT-AB12).');
+        return;
+      }
+      state.role = 'student';
+      state.code = code;
+      setJoinStatus('Connecting…');
+
+      const peer = new Peer();
+      state.peer = peer;
+
+      peer.on('open', function () {
+        const conn = peer.connect(peerIdFor(code));
+        state.conn = conn;
+        conn.on('data', function (msg) { handleHostMessage(msg); });
+        conn.on('error', function () { setJoinStatus('Could not reach that room. Check the code.'); });
+      });
+
+      peer.on('error', function (err) {
+        if (err.type === 'peer-unavailable') setJoinStatus('No room with that code is live right now.');
+        else setJoinStatus('Connection problem: ' + err.type);
+      });
+    }
+
+    function handleHostMessage(msg) {
+      if (!msg) return;
+      if (msg.type === 'CONFIG') {
+        state.config = msg.config;
+        showSubmitView();
+      } else if (msg.type === 'ACK') {
+        if (state.config.allowMultiple) {
+          $('#submit-value').value = '';
+          setSubmitStatus('Response recorded — you can submit again.');
+        } else {
+          $('#submit-value').disabled = true;
+          $('#btn-submit').disabled = true;
+          setSubmitStatus('Response recorded. Thank you!');
+        }
+      } else if (msg.type === 'REJECT') {
+        setSubmitStatus('That value was not a number — try again.');
+      }
+    }
+
+    function showSubmitView() {
+      $('#student-join').classList.add('hidden');
+      $('#student-submit').classList.remove('hidden');
+      $('#submit-question').textContent = state.config.question || 'Your response';
+      $('#submit-value').disabled = false;
+      $('#btn-submit').disabled = false;
+    }
+
+    function submitResponse() {
+      const raw = $('#submit-value').value.trim();
+      if (raw === '') return;
+      const id = makeSubmissionId();
+      state.conn.send({ type: 'DATA_SUBMIT', id: id, value: raw });
+      setSubmitStatus('Sending…');
+    }
+
+    function makeSubmissionId() {
+      if (window.crypto && crypto.randomUUID) return crypto.randomUUID();
+      return Date.now() + '-' + Math.floor(Math.random() * 1000000);
+    }
+
+    function setJoinStatus(text) { $('#join-status').textContent = text; }
+    function setSubmitStatus(text) { $('#submit-status').textContent = text; }
+
+    // 17. Chart tab switching
+    function setupChartTabs() {
+      const buttons = $all('#chart-tabs button');
+      for (let i = 0; i < buttons.length; i++) {
+        buttons[i].addEventListener('click', function () {
+          for (let j = 0; j < buttons.length; j++) buttons[j].classList.remove('active');
+          this.classList.add('active');
+          state.activeChart = this.getAttribute('data-chart');
+          Charts.render();
+        });
+      }
+    }
+
+    // 18. Boot / glue
+    function setupLanding() {
+      $('#btn-host').addEventListener('click', startHosting);
+      $('#btn-join').addEventListener('click', function () { show('student'); });
+      $('#btn-connect').addEventListener('click', connectAsStudent);
+      $('#join-code').addEventListener('keydown', function (e) { if (e.key === 'Enter') connectAsStudent(); });
+      $('#btn-submit').addEventListener('click', submitResponse);
+      $('#submit-value').addEventListener('keydown', function (e) { if (e.key === 'Enter') submitResponse(); });
+      $('#btn-csv').addEventListener('click', exportCSV);
+    }
+
+    function boot() {
+      setupLanding();
+      setupManualAdd();
+      setupBulk();
+      setupConfig();
+      setupChartTabs();
+
+      const params = new URLSearchParams(window.location.search);
+      const room = params.get('room');
+      if (room) {
+        show('student');
+        $('#join-code').value = room.toUpperCase();
+      } else {
+        show('landing');
+      }
+    }
+
+    document.addEventListener('DOMContentLoaded', boot);
+  </script>
+
+</body>
+</html>
